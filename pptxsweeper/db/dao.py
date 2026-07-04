@@ -137,7 +137,11 @@ class Registry:
                         SELECT id FROM urls
                         WHERE domain IN ({placeholders})
                           AND (status=? OR (status='parked' AND parked_until IS NOT NULL AND parked_until <= ?))
-                        ORDER BY id
+                        -- live-origin URLs first: they parallelize across
+                        -- hundreds of domains, while wayback-discovered
+                        -- (dead-origin) URLs all funnel through the shared
+                        -- web.archive.org fetcher (~3 req/s, throttled)
+                        ORDER BY CASE WHEN discovery_source LIKE 'wayback%' THEN 1 ELSE 0 END, id
                         LIMIT ?
                     )
                     RETURNING *
