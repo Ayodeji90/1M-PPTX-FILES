@@ -33,7 +33,7 @@ def batch_folder_name(batch_id: int, padding_width: int | None = None) -> str:
     return f"BATCH_{batch_id:0{width}d}"
 
 
-def delivered_filename(batch_id: int, counter: int, ext: str, padding_width: int | None = None) -> str:
+def delivered_filename(batch_id: int, counter: int, ext: str, padding_width: int | None = None, node_id: int = 0) -> str:
     if ext.startswith("."):
         ext = ext[1:]
     if ext not in ("pptx", "pdf"):
@@ -41,12 +41,12 @@ def delivered_filename(batch_id: int, counter: int, ext: str, padding_width: int
     if counter < 1 or counter > 10 ** FILE_PADDING - 1:
         raise ValueError(f"file counter out of range: {counter}")
     width = padding_width or batch_padding_width(batch_id)
-    return f"BATCH_{batch_id:0{width}d}_file_{counter:0{FILE_PADDING}d}.{ext}"
+    return f"BATCH_{batch_id:0{width}d}_file_N{node_id}_{counter:0{FILE_PADDING}d}.{ext}"
 
 
-def manifest_filename(batch_id: int, padding_width: int | None = None) -> str:
+def manifest_filename(batch_id: int, padding_width: int | None = None, node_id: int = 0) -> str:
     width = padding_width or batch_padding_width(batch_id)
-    return f"BATCH_{batch_id:0{width}d}_manifest.csv"
+    return f"BATCH_{batch_id:0{width}d}_manifest_N{node_id}.csv"
 
 
 class BatchAllocator:
@@ -82,7 +82,7 @@ class BatchAllocator:
                     (self.min_padding,),
                 )
                 max_id, max_width = cur.fetchone()
-                batch_id = self.node.next_batch_id(max_id)
+                batch_id = max_id + 1  # ALL nodes write to the SAME batch namespace now
                 width = max(max_width, batch_padding_width(batch_id, self.min_padding))
                 folder = batch_folder_name(batch_id, width)
                 self.reg.conn.execute(
@@ -122,7 +122,7 @@ class BatchAllocator:
                     raise ValueError(f"batch {batch_id} is {batch['state']}; cannot assign names")
 
                 counter = batch["next_file_counter"]
-                name = delivered_filename(batch_id, counter, ext, batch["padding_width"])
+                name = delivered_filename(batch_id, counter, ext, batch["padding_width"], self.node.node_id)
                 self.reg.conn.execute(
                     "UPDATE batches SET next_file_counter=? WHERE batch_id=?",
                     (counter + 1, batch_id),

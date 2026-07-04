@@ -201,7 +201,7 @@ class PackageStage:
 
         # 4. Manifest (regenerated deterministically every attempt).
         manifest_rows = [manifest_row(r) for r in rows]
-        manifest_path = local_batch / manifest_filename(batch_id, batch["padding_width"])
+        manifest_path = local_batch / manifest_filename(batch_id, batch["padding_width"], self.node.node_id)
         write_manifest(manifest_rows, manifest_path)
         manifest_sha = sha256_file(manifest_path)
 
@@ -422,7 +422,7 @@ class PackageStage:
                FROM files f LEFT JOIN urls u ON u.id = f.url_id
                WHERE f.batch_id=? AND f.delivered_filename IS NOT NULL
                  AND f.delivered_at IS NOT NULL""", (batch_id,))]
-        manifest_path = self.manifests_dir / manifest_filename(batch_id, batch["padding_width"])
+        manifest_path = self.manifests_dir / manifest_filename(batch_id, batch["padding_width"], self.node.node_id)
         write_manifest([manifest_row(r) for r in rows], manifest_path)
         manifest_sha = sha256_file(manifest_path)
         self.rclone.copy_file(manifest_path, folder)

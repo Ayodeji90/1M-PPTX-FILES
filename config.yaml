@@ -34,13 +34,13 @@ rclone:
   verify_method: size-only   # size-only | hash
 
 batch:
-  size: 5000
+  size: 25000
   # padding starts at 2 digits, grows to 3 automatically once batch_id > 99
   min_padding: 2
   composition:
-    high_min_pct: 0.70
-    medium_min_pct: 0.20
-    medium_max_pct: 0.30
+    high_min_pct: 0.0
+    medium_min_pct: 0.0
+    medium_max_pct: 1.0
     low_max_pct: 0.0
     # a batch is allowed to open with fewer than batch.size files only
     # when reserve+deliverable HIGH supply is provably insufficient AND
