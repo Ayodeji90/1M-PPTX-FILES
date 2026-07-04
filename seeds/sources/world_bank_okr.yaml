@@ -1,0 +1,12 @@
+# World Bank Open Knowledge Repository (DSpace 7 REST API)
+name: world_bank_okr
+domain: openknowledge.worldbank.org
+tier: 4
+method: api_json
+url: https://openknowledge.worldbank.org/server/api/discover/search/objects
+page_param: page
+page_start: 0
+params:
+  query: "presentation"
+  size: 100
+delay_s: 2.0

@@ -1,0 +1,7 @@
+# IMF eLibrary via sitemaps
+name: imf_elibrary
+domain: www.elibrary.imf.org
+tier: 4
+method: sitemap
+url: https://www.elibrary.imf.org/sitemap.xml
+delay_s: 3.0

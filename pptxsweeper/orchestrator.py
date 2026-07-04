@@ -1,0 +1,216 @@
+"""One-command pipeline: `pptxsweeper run`.
+
+Runs everything continuously in parallel until stopped (Ctrl+C):
+
+  thread A: harvest (all configured tiers) ......... finds URLs, repeats daily
+  thread B: filter + download ...................... downloads ppt/pptx locally
+  thread C: classify + package + status ............ quality-checks and keeps
+                                                     uploading finished batches
+                                                     to Google Drive
+
+Each stage runs as a subprocess of the same CLI, so crash-safety,
+resume, politeness and locking behave exactly as when stages are run
+by hand. Stage output goes to data/logs/*.jsonl; the console shows a
+one-line progress summary every minute.
+"""
+from __future__ import annotations
+
+import signal
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+
+from .config import Config
+from .node import NodeIdentity
+from .packager.rclone import Rclone
+
+RCLONE_HELP = """\
+Google Drive is not connected yet (rclone remote '{remote}' not found).
+
+One-time setup on THIS machine:
+  1. Run:  rclone config
+  2. Choose: n (new remote), name it: {remote}, storage type: drive
+  3. Leave client_id/secret empty, scope: 1 (full access), accept defaults
+  4. When asked "Use web browser to automatically authenticate?":
+       - on this computer: say y and log into your Google account
+       - on a cloud VM (no browser): say n, then on your laptop run
+         `rclone authorize "drive"` and paste the token back
+  5. Done. Re-run:  pptxsweeper run
+"""
+
+
+# Sources ordered by expected .ppt/.pptx yield per hour. Common Crawl is
+# LAST and opt-in: verified to contain ~zero PowerPoint files while
+# costing days of index scanning -- never let it starve the others.
+HARVEST_PRIORITY = [
+    "wayback_cdx",            # tier 1 -- the ppt/pptx workhorse
+    "internet_archive",       # tier 6 -- huge directly-downloadable corpus
+    "tier4_international",    # tier 4
+    "us_federal_sitemaps",    # tier 3
+    "universities_ocw",       # tier 5
+    "zenodo",                 # tier 6
+    "figshare",               # tier 6
+    "osf",                    # tier 6
+    "github_code_search",     # tier 6
+    "investor_relations",     # tier 2 -- IR decks are mostly pdf: low ppt yield
+    "sec_edgar",              # tier 2 -- exhibits are mostly htm/pdf: low yield
+    "commoncrawl",            # tier 1 -- opt-in via --with-commoncrawl
+]
+
+
+class Orchestrator:
+    def __init__(self, cfg: Config, tiers: list[int], harvest_interval_h: float,
+                 harvest_limit: int | None = None, with_commoncrawl: bool = False):
+        self.cfg = cfg
+        self.harvest_interval_s = harvest_interval_h * 3600
+        self.harvest_limit = harvest_limit
+        self.stop = threading.Event()
+        self._children: dict[str, subprocess.Popen] = {}
+        self._lock = threading.Lock()
+        self.db_path = cfg.path("paths", "db_path")
+        self.current_harvest = "-"
+
+        from .harvesters import all_harvesters
+        registered = all_harvesters()
+        wanted = [n for n in HARVEST_PRIORITY
+                  if n in registered and registered[n].tier in tiers]
+        if not with_commoncrawl and "commoncrawl" in wanted:
+            wanted.remove("commoncrawl")
+        # anything registered but not in the priority list runs at the end
+        wanted += [n for n, c in sorted(registered.items())
+                   if n not in wanted and c.tier in tiers
+                   and (with_commoncrawl or n != "commoncrawl")]
+        self.harvest_sources = wanted
+
+    # ------------------------------------------------------------------
+    def _stage(self, name: str, *args: str) -> int:
+        """Run one CLI stage as a child process; output goes to its log file."""
+        if self.stop.is_set():
+            return 1
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "pptxsweeper.cli", *args],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        with self._lock:
+            self._children[name] = proc
+        try:
+            return proc.wait()
+        finally:
+            with self._lock:
+                self._children.pop(name, None)
+
+    def _sleep(self, seconds: float) -> None:
+        self.stop.wait(timeout=seconds)
+
+    # ------------------------------------------------------------------
+    def harvest_loop(self) -> None:
+        while not self.stop.is_set():
+            # all sources discover CONCURRENTLY in one process; a slow
+            # sitemap walk can no longer starve the productive sources
+            self.current_harvest = f"{len(self.harvest_sources)} sources in parallel"
+            args = ["harvest", "--source", ",".join(self.harvest_sources)]
+            if self.harvest_limit:
+                args += ["--limit", str(self.harvest_limit)]
+            self._stage("harvest", *args)
+            self.current_harvest = "idle"
+            self._sleep(self.harvest_interval_s)
+
+    def download_loop(self) -> None:
+        while not self.stop.is_set():
+            self._stage("filter", "filter")
+            code = self._stage("download", "download")
+            self._sleep(120 if code == 0 else 300)
+
+    def deliver_loop(self) -> None:
+        node = NodeIdentity.from_env()
+        last_dedup = 0.0
+        while not self.stop.is_set():
+            self._stage("classify", "classify")
+            # streaming: every qualifying file goes to Drive immediately
+            self._stage("package", "package", "--stream")
+            self._stage("status", "status", "--sync")
+            if node.node_count > 1 and time.time() - last_dedup > 3600:
+                self._stage("sync-dedup", "sync-dedup")
+                last_dedup = time.time()
+            self._sleep(15)
+
+    # ------------------------------------------------------------------
+    def _counts(self) -> dict:
+        try:
+            # not mode=ro: a read-only handle can fail WAL recovery while
+            # subprocesses are writing, which would fake all-zero stats
+            conn = sqlite3.connect(str(self.db_path), timeout=5)
+            by_status = dict(conn.execute(
+                "SELECT status, COUNT(*) FROM urls GROUP BY status").fetchall())
+            delivered = conn.execute(
+                "SELECT COUNT(*) FROM files WHERE delivered_at IS NOT NULL").fetchone()[0]
+            batches = conn.execute(
+                "SELECT COUNT(*) FROM batches WHERE state='finalized'").fetchone()[0]
+            conn.close()
+            return {"s": by_status, "delivered": delivered, "batches": batches}
+        except sqlite3.Error:
+            return {"s": {}, "delivered": 0, "batches": 0}
+
+    def monitor_loop(self) -> None:
+        while not self.stop.is_set():
+            c = self._counts()
+            s = c["s"]
+            print(f"[{time.strftime('%H:%M:%S')}] harvesting={self.current_harvest} "
+                  f"queue={s.get('discovered', 0)} "
+                  f"downloaded={s.get('downloaded', 0)} staged={s.get('classified', 0)} "
+                  f"review={s.get('review', 0)} rejected={s.get('rejected', 0)} "
+                  f"UPLOADED-TO-DRIVE={c['delivered']} batches={c['batches']}",
+                  flush=True)
+            self._sleep(15)
+
+    # ------------------------------------------------------------------
+    def shutdown(self, *_args) -> None:
+        if self.stop.is_set():
+            return
+        print("\nStopping (letting in-flight work finish)...", flush=True)
+        self.stop.set()
+        with self._lock:
+            for proc in self._children.values():
+                proc.terminate()
+
+    def run(self) -> None:
+        signal.signal(signal.SIGINT, self.shutdown)
+        signal.signal(signal.SIGTERM, self.shutdown)
+        threads = [
+            threading.Thread(target=self.harvest_loop, name="harvest", daemon=True),
+            threading.Thread(target=self.download_loop, name="download", daemon=True),
+            threading.Thread(target=self.deliver_loop, name="deliver", daemon=True),
+            threading.Thread(target=self.monitor_loop, name="monitor", daemon=True),
+        ]
+        for t in threads:
+            t.start()
+        while not self.stop.is_set():
+            time.sleep(1)
+        # give children a moment to exit gracefully
+        deadline = time.time() + 60
+        with self._lock:
+            children = list(self._children.values())
+        for proc in children:
+            try:
+                proc.wait(timeout=max(1, deadline - time.time()))
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        print("Stopped. Progress is saved; run `pptxsweeper run` to continue.", flush=True)
+
+
+def preflight(cfg: Config) -> Rclone | None:
+    """Verify Google Drive is reachable and create the delivery folder."""
+    rc_cfg = cfg.raw["rclone"]
+    rclone = Rclone(bin=rc_cfg["bin"], remote=cfg.rclone_remote(),
+                    root_folder=rc_cfg["root_folder"])
+    if not rclone.available():
+        print("ERROR: rclone is not installed. Install it:  sudo apt install rclone")
+        return None
+    if not rclone.check_remote_configured():
+        print(RCLONE_HELP.format(remote=cfg.rclone_remote()))
+        return None
+    rclone.mkdir()  # creates PptxSweeper_Delivery/ on Drive right away
+    print(f"Google Drive connected. Delivering to: {rclone.remote_path()}")
+    return rclone

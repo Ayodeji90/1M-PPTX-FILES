@@ -1,0 +1,45 @@
+# Pirate / exclusion domain blocklist. One entry per line.
+# Bare domain blocks it and all subdomains; `re:` prefixes a regex
+# matched against the full URL. Hits are HARD REJECTS.
+# Extend freely -- the filter stage reloads this file on every run.
+
+# Document piracy / gray-area sharing sites
+sci-hub.se
+sci-hub.ru
+sci-hub.st
+libgen.is
+libgen.rs
+libgen.li
+library.lol
+z-lib.org
+zlibrary.to
+b-ok.org
+booksc.org
+annas-archive.org
+sharedoc.net
+docdroid.net
+vdocuments.net
+vdocument.in
+docslide.net
+dokumen.pub
+dokumen.tips
+pdfcoffee.com
+idoc.pub
+kupdf.net
+edoc.pub
+fdocuments.in
+fdocuments.net
+documen.site
+pdfslide.net
+pdfslide.tips
+cupdf.com
+slideshare.net        # ToS prohibits bulk download; treat as excluded
+scribd.com            # paywalled/user-uploaded; rights unclear
+coursehero.com
+studocu.com
+studylib.net
+academia.edu          # user-uploaded, rights unclear at bulk scale
+doku.pub
+
+# URL patterns
+re:.*/(cracked|keygen|warez)/.*

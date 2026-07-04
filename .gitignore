@@ -1,0 +1,18 @@
+# local state -- NEVER commit: payloads, registry, logs
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# secrets (contact email, node identity per machine)
+.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# generated test fixtures
+tests/fixtures/decks/

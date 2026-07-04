@@ -1,0 +1,25 @@
+# UN / WHO regional sites (sitemap discovery, best-effort)
+- name: who_int
+  domain: www.who.int
+  tier: 4
+  method: sitemap
+  url: https://www.who.int/sitemap.xml
+  delay_s: 3.0
+- name: un_org
+  domain: www.un.org
+  tier: 4
+  method: sitemap
+  url: https://www.un.org/sitemap.xml
+  delay_s: 3.0
+- name: unstats
+  domain: unstats.un.org
+  tier: 4
+  method: sitemap
+  url: https://unstats.un.org/sitemap.xml
+  delay_s: 3.0
+- name: paho
+  domain: www.paho.org
+  tier: 4
+  method: sitemap
+  url: https://www.paho.org/sitemap.xml
+  delay_s: 3.0

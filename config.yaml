@@ -1,0 +1,223 @@
+########################################################################
+# PptxSweeper pipeline configuration.
+# Never hardcode paths/thresholds/secrets in code -- everything tunable
+# lives here. Secrets (contact email) live in .env, never in this file.
+########################################################################
+
+# Only these formats are ever queued, downloaded, or delivered.
+# Enforced in three places: URL filter, download (magic bytes), classify.
+allowed_formats: ["pptx", "ppt"]
+
+contact_email_env: CONTACT_EMAIL
+user_agent_template: "PptxSweeperBot/1.0 (dataset research; {contact_email})"
+
+paths:
+  data_dir: ./data
+  db_path: ./data/registry.db
+  download_tmp_dir: ./data/tmp_downloads
+  staging_dir: ./data/staging
+  review_dir: ./data/review
+  logs_dir: ./data/logs
+  seeds_dir: ./seeds
+  status_dir: ./data/status
+  batch_build_dir: ./data/batch_build
+  manifests_dir: ./data/manifests
+
+rclone:
+  bin: rclone
+  remote_name: gdrive
+  root_folder: PptxSweeper_Delivery
+  batch_folder_pattern: "BATCH_{batch_id}"
+  review_folder: _review
+  status_folder: _status
+  backups_folder: registry_backups
+  verify_method: size-only   # size-only | hash
+
+batch:
+  size: 5000
+  # padding starts at 2 digits, grows to 3 automatically once batch_id > 99
+  min_padding: 2
+  composition:
+    high_min_pct: 0.70
+    medium_min_pct: 0.20
+    medium_max_pct: 0.30
+    low_max_pct: 0.0
+    # a batch is allowed to open with fewer than batch.size files only
+    # when reserve+deliverable HIGH supply is provably insufficient AND
+    # a max_open_days ceiling is hit (see packager DECISIONS.md entry)
+    max_batch_open_days: 14
+
+upload:
+  daily_byte_budget_gb: 700       # margin under Google's 750GB/day cap
+  max_retries: 5
+  retry_backoff_s: [10, 30, 120, 300, 900]
+
+download:
+  max_content_length_mb: 300
+  min_content_length_kb: 10
+  connect_timeout_s: 15
+  read_timeout_s: 90
+  concurrency: 150
+  # Downloads pause when free disk falls below this. 5 suits a laptop
+  # (payloads are uploaded to Drive and deleted every batch); raise to
+  # 20+ on a production VM with a dedicated disk.
+  min_free_disk_gb: 5
+  shutdown_grace_s: 30             # SIGTERM: finish in-flight, then cancel
+  db_writer_batch_size: 100        # commit every 50-200 rows
+  db_writer_flush_interval_s: 2.0
+  claim_batch_size: 25             # urls claimed per worker per round
+  max_attempts: 4                  # per-URL attempts before dead/wayback
+  wayback_fallback: true           # archived copy when origin dead/blocked
+
+politeness:
+  default_delay_s: 1.5      # per-domain; robots.txt Crawl-delay always wins
+  jitter_pct: 0.4
+  robots_cache_ttl_hours: 24
+  head_before_get: true
+  # Big archives that comfortably serve faster than small org sites.
+  # Matched by domain suffix; value = seconds between requests.
+  domain_delay_overrides:
+    archive.org: 0.5
+    web.archive.org: 0.5
+  circuit_breaker:
+    backoff_stages_s: [30, 300, 1800]   # 30s -> 5min -> 30min
+    park_after_consecutive_failures: 3
+    park_duration_hours: 48
+    blacklist_after_parks: 2
+  edgar:
+    requests_per_sec: 10
+    user_agent_template: "PptxSweeperBot/1.0 (investor-presentation dataset research; {contact_email})"
+
+wayback:
+  cdx_base_url: "https://web.archive.org/cdx/search/cdx"
+  fetch_base_url: "https://web.archive.org"
+  requests_per_sec_per_worker: 3   # backs off immediately on any 429
+  cdx_page_size: 1000
+  retry_after_429_s: [30, 120, 300]
+
+common_crawl:
+  index_list_url: "https://index.commoncrawl.org/collinfo.json"
+  num_recent_crawls: 15
+  # Anonymous S3 is denied; the supported free path is HTTPS range reads
+  # against data.commoncrawl.org using each crawl's cc-index-table.paths.gz
+  # manifest (~300 parquet parts per crawl, only the url column is read).
+  data_base_url: "https://data.commoncrawl.org"
+  cdx_fallback_base: "https://index.commoncrawl.org"
+  # NOTE (verified 2026-07): Common Crawl captures essentially ZERO
+  # .ppt/.pptx files -- its crawler skips PowerPoint binaries -- so this
+  # harvester will find very little. Wayback CDX + Tiers 2-6 are the
+  # real ppt/pptx sources. (Client decision: ppt/pptx only, no pdf.)
+  extensions: [".pptx", ".ppt"]
+
+quality:
+  epsilon: 0.03
+  min_slides: 5
+  ocr_ambiguous_only: true
+  use_opencv: false
+  high:
+    min_analytical_pct: 0.50
+    min_chart_diagram_pages: 3
+    max_photo_heavy_pct: 0.30
+  medium:
+    min_analytical_pct: 0.40
+    min_chart_diagram_pages: 1
+  low:
+    text_only_pct: 0.75
+    photo_heavy_pct: 0.50
+  image_signals:
+    unique_color_ratio_max: 0.15
+    straight_edge_ratio_min: 0.35
+    uniform_bg_ratio_min: 0.25
+    text_density_ambiguous_low: 0.03
+    text_density_ambiguous_high: 0.15
+
+compliance:
+  blocklist_file: ./seeds/blocklist_domains.txt
+  # Revised client criteria (Source Exclusion Requirements): Fortune 500
+  # companies + subsidiaries, elite US universities, and prestigious US
+  # research centers / national labs / think tanks are excluded unless
+  # written approval exists. Same file format as the blocklist.
+  excluded_sources_file: ./seeds/excluded_sources.txt
+  pii_review_on_hit: true
+  minors_review_on_hit: true
+  prohibited_reject_on_hit: true
+
+conversion:
+  soffice_bin: soffice
+  timeout_s: 120
+  max_concurrent: 4
+
+classify:
+  review_dir_cap_gb: 20    # local review/ payloads pruned after Drive sync
+  commit_every: 50
+  workers: 0               # 0 = one per CPU core (parallel quality engine)
+  chunk_limit: 150         # files per classify pass, so uploads interleave
+
+filter:
+  per_domain_cap: 20000
+  tier_domain_caps:
+    5: 500                 # universities/OCW: low acceptance expected
+
+harvesters:
+  tier1:
+    # CDX APIs (Common Crawl fallback + Wayback) are domain-keyed and
+    # cannot search by file extension across the whole web; they walk
+    # this seed list plus every domain already in the registry.
+    domain_seeds_file: ./seeds/cdx_domains.txt
+  tier2:
+    seed_tickers_file: ./seeds/sp1500_tickers.csv
+    ir_domain_cap: 2000
+  tier3:
+    sitemap_domains:
+      - federalreserve.gov
+      - eia.gov
+      - bls.gov
+      - cbo.gov
+      - census.gov
+      - ers.usda.gov
+      - cdc.gov
+      - gao.gov
+      - fdic.gov
+      - treasury.gov
+    fed_regional_banks:
+      - minneapolisfed.org
+      - newyorkfed.org
+      - bostonfed.org
+      - philadelphiafed.org
+      - clevelandfed.org
+      - richmondfed.org
+      - atlantafed.org
+      - chicagofed.org
+      - stlouisfed.org
+      - kansascityfed.org
+      - dallasfed.org
+      - frbsf.org
+    osti_api_base: "https://www.osti.gov/api/v1/records"
+  tier4:
+    central_banks_seed: ./seeds/central_banks.csv
+    generic_sources_dir: ./seeds/sources
+  tier5:
+    domain_cap: 500
+    ocw_seed_file: ./seeds/ocw_sites.csv
+  tier6:
+    zenodo_api: "https://zenodo.org/api/records"
+    figshare_api: "https://api.figshare.com/v2/articles/search"
+    osf_api: "https://api.osf.io/v2/search/"
+    ia_api: "https://archive.org/advancedsearch.php"
+    github_code_search_api: "https://api.github.com/search/code"
+
+multi_node:
+  # Work is split across machines by hash(domain) % NODE_COUNT == NODE_ID
+  # (NODE_ID / NODE_COUNT come from .env). Guarantees a domain -- and
+  # therefore a URL -- is only ever processed by one machine.
+  dedup_folder: _dedup            # on Drive, under the delivery root
+  dedup_sync_interval_min: 60     # upload own hashes / import peers' hashes
+  # Batch numbers are interleaved so they are globally unique with no
+  # coordination: node k of N creates batches k+1, k+1+N, k+1+2N, ...
+  interleave_batch_ids: true
+
+logging:
+  level: INFO
+  json_lines: true
+  rotate_max_bytes: 52428800
+  rotate_backup_count: 10

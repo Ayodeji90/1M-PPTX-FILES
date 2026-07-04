@@ -1,0 +1,45 @@
+# SOURCE EXCLUSIONS (beyond the pirate blocklist).
+# Same format as blocklist_domains.txt: bare domain (blocks subdomains)
+# or `re:` regex on the full URL. Hits -> filtered_out, never downloaded.
+#
+# CLIENT UPDATE 2026-07-03: Fortune 500 companies and US universities
+# are INCLUDED again (new instruction) -- their entries were removed.
+# US national labs / research centers / think tanks remain excluded
+# from the earlier revised criteria; delete the lines below if the
+# client lifts that too.
+
+# --- Prestigious US research centers / national labs / FFRDCs ---
+ornl.gov
+lanl.gov
+llnl.gov
+anl.gov
+bnl.gov
+pnnl.gov
+sandia.gov
+nrel.gov
+fnal.gov
+slac.stanford.edu
+jlab.org
+ameslab.gov
+inl.gov
+netl.doe.gov
+osti.gov
+mitre.org
+rand.org
+battelle.org
+ida.org
+cna.org
+aerospace.org
+
+# --- Think tanks / nationally recognized research orgs ---
+brookings.edu
+pewresearch.org
+urban.org
+heritage.org
+cato.org
+aei.org
+cfr.org
+carnegieendowment.org
+csis.org
+hoover.org
+nber.org

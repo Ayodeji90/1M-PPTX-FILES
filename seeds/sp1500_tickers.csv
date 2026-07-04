@@ -1,0 +1,70 @@
+ticker,company,website
+# Tier 2 IR harvester seed list: Fortune 500 + S&P 1500 + mid/small caps.
+# CLIENT UPDATE 2026-07-03: Fortune 500 companies are INCLUDED (new
+# instruction). Extend this file with the full universe, one row per company.
+AAPL,Apple Inc.,apple.com
+MSFT,Microsoft Corporation,microsoft.com
+GOOGL,Alphabet Inc.,abc.xyz
+AMZN,Amazon.com Inc.,amazon.com
+NVDA,NVIDIA Corporation,nvidia.com
+META,Meta Platforms Inc.,meta.com
+BRK.B,Berkshire Hathaway,berkshirehathaway.com
+JPM,JPMorgan Chase & Co.,jpmorganchase.com
+JNJ,Johnson & Johnson,jnj.com
+V,Visa Inc.,visa.com
+PG,Procter & Gamble,pg.com
+XOM,Exxon Mobil,exxonmobil.com
+UNH,UnitedHealth Group,unitedhealthgroup.com
+HD,Home Depot,homedepot.com
+MA,Mastercard,mastercard.com
+PFE,Pfizer,pfizer.com
+KO,Coca-Cola Company,coca-colacompany.com
+PEP,PepsiCo,pepsico.com
+COST,Costco Wholesale,costco.com
+WMT,Walmart,walmart.com
+DIS,Walt Disney Company,thewaltdisneycompany.com
+CSCO,Cisco Systems,cisco.com
+INTC,Intel Corporation,intel.com
+VZ,Verizon Communications,verizon.com
+T,AT&T,att.com
+CVX,Chevron,chevron.com
+MRK,Merck & Co.,merck.com
+ABT,Abbott Laboratories,abbott.com
+ORCL,Oracle Corporation,oracle.com
+CRM,Salesforce,salesforce.com
+NKE,Nike,nike.com
+MCD,McDonald's,corporate.mcdonalds.com
+IBM,IBM,ibm.com
+GE,General Electric,ge.com
+BA,Boeing,boeing.com
+CAT,Caterpillar,caterpillar.com
+MMM,3M Company,3m.com
+GS,Goldman Sachs,goldmansachs.com
+MS,Morgan Stanley,morganstanley.com
+BAC,Bank of America,bankofamerica.com
+WFC,Wells Fargo,wellsfargo.com
+C,Citigroup,citigroup.com
+AXP,American Express,americanexpress.com
+UPS,United Parcel Service,ups.com
+FDX,FedEx,fedex.com
+HON,Honeywell,honeywell.com
+LMT,Lockheed Martin,lockheedmartin.com
+RTX,RTX Corporation,rtx.com
+DE,Deere & Company,deere.com
+F,Ford Motor Company,ford.com
+GM,General Motors,gm.com
+GGG,Graco Inc.,graco.com
+NDSN,Nordson Corporation,nordson.com
+DCI,Donaldson Company,donaldson.com
+TTC,The Toro Company,thetorocompany.com
+ATR,AptarGroup,aptar.com
+LECO,Lincoln Electric,lincolnelectric.com
+WTS,Watts Water Technologies,watts.com
+RBC,RBC Bearings,rbcbearings.com
+AWI,Armstrong World Industries,armstrongceilings.com
+FELE,Franklin Electric,franklin-electric.com
+KWR,Quaker Houghton,quakerhoughton.com
+CW,Curtiss-Wright,curtisswright.com
+BRC,Brady Corporation,bradycorp.com
+ESE,ESCO Technologies,escotechnologies.com
+SXI,Standex International,standex.com
