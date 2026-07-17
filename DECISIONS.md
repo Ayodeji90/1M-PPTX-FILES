@@ -1,5 +1,56 @@
 # PptxSweeper — Engineering Decisions Log
 
+## Fresh-start dedup + new sources + sharding rework (2026-07-17)
+
+Goal: relaunch against a fresh Drive after ~30k files were already
+collected elsewhere, avoid re-downloading them, and add enough NEW
+sources to credibly reach 1M.
+
+- **Dedup is by content hash, not by source.** The same deck is hosted on
+  many sites, so skipping previously-touched *sources* both misses good
+  files and fails to prevent duplicates. Instead the prior collection's
+  SHA256s are imported (`import-catalog`, fed by `rclone hashsum sha256`
+  off the old Drive folder — no re-download needed) and the downloader's
+  existing content-hash dedup drops any match. See README §0.
+
+- **New Tier 7 sources added** (highest expected .ppt/.pptx yield first):
+  - `brave_search` — open-web `filetype:pptx/ppt` dorking via the Brave
+    Search API (`BRAVE_API_KEY`). Biggest new vein; broadening-term list
+    in config pushes past Brave's ~200-results-per-query ceiling.
+  - `standards_bodies` — recursive autoindex walker over 3GPP FTP, IETF
+    proceedings, and OASIS docs (near-pure PowerPoint directory trees).
+  - `govdata_ckan` — national/EU open-data portals via the CKAN Action
+    API with `res_format:(PPT OR PPTX)`.
+  - Economics/repository breadth is delivered by **domain-seed expansion**
+    for the (MIME-accurate) Wayback tier plus sitemap specs
+    (`seeds/sources/econ_repositories.yaml`), rather than OAI-PMH — OAI
+    `oai_dc` records point at landing pages / PDF bitstreams, not .ppt.
+
+- **Multi-node sharding moved to DISCOVERY time.** Previously every node
+  harvested the entire universe and only the download stage sharded by
+  domain — so N nodes hammered every API N times, and single-domain Tier-6
+  sources (all of Zenodo is `zenodo.org`, etc.) were downloaded by exactly
+  one node with the other N-1 nodes' harvest effort wasted. Now:
+  - domain-list sources (Wayback, sitemaps, IR, OCW, tier4, standards)
+    shard their domain list by `owns_domain()`;
+  - global/paginated sources (Brave, Zenodo, Figshare, OSF, IA, govdata)
+    shard by `owns_page()`;
+  - each node keeps its own local DB, so the shards are disjoint by
+    construction and the download stage no longer re-shards by domain (it
+    downloads everything it discovered).
+
+- **Dead harvesters unregistered.** `github_code_search` (code search does
+  not index binary .pptx; raw `HEAD` refs 404) and `sec_edgar` (exhibits
+  are .htm/.pdf, ~0 .pptx) are kept as code but removed from the run.
+
+- **Format-verified sources bypass the URL-suffix filter.** Figshare/OSF
+  download URLs are extensionless (`/files/<id>`) and were being silently
+  dropped by the pre-download extension gate; Wayback captures can be
+  extensionless too. Sources that verify format at discovery (by MIME /
+  API filetype / CKAN `res_format`) now skip the suffix check and rely on
+  the download magic-byte guard (`_FORMAT_VERIFIED_SOURCES`).
+
+
 ## Revised client criteria applied (criteria1.pdf / criteria2.pdf, 2026-07-03)
 
 - **PPT/PPTX only** (client instruction overriding the PDFs' "PPTX or

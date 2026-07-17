@@ -52,6 +52,33 @@ class NodeIdentity:
         return [d for d in domains if self.owns_domain(d)]
 
     # ------------------------------------------------------------------
+    # Discovery-work sharding
+    #
+    # Harvesters come in two shapes and must shard their *discovery work*
+    # (which node calls which API) consistently with how the resulting
+    # URLs are later owned for download:
+    #
+    #   * domain-list sources (Wayback, sitemaps, OAI repos, standards
+    #     domain walks): iterate a domain list -> shard the LIST by domain
+    #     with owns_domain(); ownership == domain, so a URL is discovered
+    #     and downloaded by the same node.
+    #   * global/aggregator sources (Brave, Zenodo, Figshare, OSF, IA,
+    #     IETF, data.europa): paginated queries returning arbitrary or
+    #     single-domain URLs -> shard the PAGES with owns_page(); the
+    #     harvesting node owns whatever it discovered, so the download
+    #     stage must NOT re-shard by domain (see download/worker.py).
+    #
+    # Because every node keeps its OWN local registry.db, sharding at
+    # discovery time makes the N databases disjoint by construction and
+    # eliminates the redundant N-times API hammering the old code did.
+    # ------------------------------------------------------------------
+    def owns_page(self, index: int) -> bool:
+        """Round-robin page ownership for globally-paginated sources."""
+        if self.node_count == 1:
+            return True
+        return index % self.node_count == self.node_id
+
+    # ------------------------------------------------------------------
     def owns_batch_id(self, batch_id: int) -> bool:
         """Interleaved batch namespace: node k owns ids where (id-1) % N == k."""
         if self.node_count == 1:

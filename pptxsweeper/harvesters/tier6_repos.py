@@ -27,6 +27,9 @@ class ZenodoHarvester(Harvester):
         api = self.cfg.raw["harvesters"]["tier6"]["zenodo_api"]
         page = 1
         while page <= 100:   # zenodo caps deep pagination
+            if not self.owns_page(page):   # global source: shard pages across nodes
+                page += 1
+                continue
             resp = await self.polite_get(api, params={
                 "q": 'filetype:pptx OR filetype:ppt OR resource_type.type:"presentation"',
                 "size": 100, "page": page, "access_right": "open",
@@ -59,6 +62,9 @@ class FigshareHarvester(Harvester):
         api = self.cfg.raw["harvesters"]["tier6"]["figshare_api"]
         page = 1
         while page <= 100:
+            if not self.owns_page(page):   # global source: shard pages across nodes
+                page += 1
+                continue
             try:
                 resp = await self.client.post(api, json={
                     "search_for": ":extension: pptx OR :extension: ppt",
@@ -94,22 +100,33 @@ class OsfHarvester(Harvester):
     tier = 6
 
     async def discover(self) -> AsyncIterator[CandidateURL]:
-        url = "https://api.osf.io/v2/files/?filter[name][icontains]=.pptx"
-        while url:
-            resp = await self.polite_get(url, delay_s=1.5)
-            if resp is None or resp.status_code != 200:
-                break
-            payload = resp.json()
-            for item in payload.get("data", []):
-                attrs = item.get("attributes") or {}
-                name = attrs.get("name", "")
-                links = item.get("links") or {}
-                download = links.get("download", "")
-                if name.lower().endswith(PRESENTATION_EXTENSIONS) and download:
-                    yield CandidateURL(url=download, tier=self.tier,
-                                       discovery_source="osf",
-                                       metadata={"filename": name})
-            url = (payload.get("links") or {}).get("next")
+        # OSF also stores legacy .ppt; sweep both extensions.
+        for ext in (".pptx", ".ppt"):
+            url = f"https://api.osf.io/v2/files/?filter[name][icontains]={ext}"
+            page_index = 0
+            while url:
+                page_index += 1
+                if not self.owns_page(page_index):   # global source: page-shard
+                    # still must follow the cursor to reach owned pages
+                    resp = await self.polite_get(url, delay_s=1.5)
+                    if resp is None or resp.status_code != 200:
+                        break
+                    url = (resp.json().get("links") or {}).get("next")
+                    continue
+                resp = await self.polite_get(url, delay_s=1.5)
+                if resp is None or resp.status_code != 200:
+                    break
+                payload = resp.json()
+                for item in payload.get("data", []):
+                    attrs = item.get("attributes") or {}
+                    name = attrs.get("name", "")
+                    links = item.get("links") or {}
+                    download = links.get("download", "")
+                    if name.lower().endswith(PRESENTATION_EXTENSIONS) and download:
+                        yield CandidateURL(url=download, tier=self.tier,
+                                           discovery_source="osf",
+                                           metadata={"filename": name})
+                url = (payload.get("links") or {}).get("next")
 
 
 @register
@@ -121,6 +138,9 @@ class InternetArchiveHarvester(Harvester):
         search_api = self.cfg.raw["harvesters"]["tier6"]["ia_api"]
         page = 1
         while page <= 200:
+            if not self.owns_page(page):   # global source: shard pages across nodes
+                page += 1
+                continue
             resp = await self.polite_get(search_api, params={
                 "q": 'format:("Microsoft PowerPoint" OR "PowerPoint")',
                 "fl[]": "identifier", "rows": 100, "page": page, "output": "json",
@@ -148,7 +168,12 @@ class InternetArchiveHarvester(Harvester):
             page += 1
 
 
-@register
+# NOT registered: GitHub's code-search index only covers TEXT source
+# files, so binary .ppt/.pptx are never returned (verified: extension:pptx
+# yields ~0), the REST code-search endpoint requires auth, and raw URLs
+# built with a `HEAD` ref 404 (raw.githubusercontent.com needs a real
+# branch/sha). Kept for reference; re-@register only after reworking it to
+# resolve a real default branch and confirming a viable query.
 class GithubCodeSearchHarvester(Harvester):
     name = "github_code_search"
     tier = 6

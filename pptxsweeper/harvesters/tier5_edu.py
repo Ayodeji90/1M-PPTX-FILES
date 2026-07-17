@@ -35,7 +35,7 @@ class OcwHarvester(Harvester):
             rows = list(csv.DictReader(fh))
         for row in rows:
             domain = (row.get("domain") or "").strip()
-            if not domain:
+            if not domain or not self.owns_domain(domain):
                 continue
             async for url in walk_domain_sitemaps(self, domain, DOC_EXTENSIONS,
                                                   delay_s=3.0):

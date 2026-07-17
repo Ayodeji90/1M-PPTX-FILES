@@ -49,6 +49,8 @@ class InvestorRelationsHarvester(Harvester):
                 continue
             base_domain = urlsplit(website if "//" in website else f"https://{website}").netloc
             base_domain = base_domain.removeprefix("www.")
+            if not self.owns_domain(base_domain):
+                continue
             async for candidate in self._harvest_company(company, base_domain):
                 yield candidate
 

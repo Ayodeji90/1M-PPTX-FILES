@@ -16,5 +16,8 @@ from . import tier3_federal      # noqa: F401
 from . import tier4_generic       # noqa: F401
 from . import tier5_edu           # noqa: F401
 from . import tier6_repos         # noqa: F401
+from . import tier7_search        # noqa: F401
+from . import tier7_standards     # noqa: F401
+from . import tier7_govdata       # noqa: F401
 
 __all__ = ["CandidateURL", "Harvester", "register", "get_harvester", "all_harvesters"]

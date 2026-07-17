@@ -152,6 +152,11 @@ class Tier4Harvester(Harvester):
 
     async def discover(self) -> AsyncIterator[CandidateURL]:
         for spec in self._load_specs():
+            # domain-list sharding: each YAML/central-bank source is a
+            # single domain, so a node only harvests the specs it owns.
+            domain = spec.get("domain", "")
+            if domain and not self.owns_domain(domain):
+                continue
             sub = GenericSourceHarvester(self.cfg, self.client, spec)
             try:
                 async for candidate in sub.discover():

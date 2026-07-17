@@ -46,17 +46,20 @@ One-time setup on THIS machine:
 # costing days of index scanning -- never let it starve the others.
 HARVEST_PRIORITY = [
     "wayback_cdx",            # tier 1 -- the ppt/pptx workhorse
+    "brave_search",           # tier 7 -- open-web filetype dorking: biggest new vein
+    "standards_bodies",       # tier 7 -- 3GPP/IETF/OASIS autoindex: near-pure ppt
     "internet_archive",       # tier 6 -- huge directly-downloadable corpus
+    "govdata_ckan",           # tier 7 -- national/EU open-data portals
     "tier4_international",    # tier 4
     "us_federal_sitemaps",    # tier 3
     "universities_ocw",       # tier 5
     "zenodo",                 # tier 6
     "figshare",               # tier 6
     "osf",                    # tier 6
-    "github_code_search",     # tier 6
     "investor_relations",     # tier 2 -- IR decks are mostly pdf: low ppt yield
-    "sec_edgar",              # tier 2 -- exhibits are mostly htm/pdf: low yield
     "commoncrawl",            # tier 1 -- opt-in via --with-commoncrawl
+    # NOTE: sec_edgar + github_code_search are unregistered (yield ~0 ppt);
+    # see their harvester modules for why.
 ]
 
 

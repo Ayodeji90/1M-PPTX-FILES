@@ -15,7 +15,7 @@ def build_client(user_agent: str, connect_timeout: float = 15,
         timeout=httpx.Timeout(connect=connect_timeout, read=read_timeout,
                               write=60, pool=60),
         follow_redirects=True,
-        limits=httpx.Limits(max_connections=300, max_keepalive_connections=100),
+        limits=httpx.Limits(max_connections=500, max_keepalive_connections=150),
         http2=True,
     )
 

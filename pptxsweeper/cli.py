@@ -54,8 +54,8 @@ def main() -> None:
 
 # ----------------------------------------------------------------------
 @main.command()
-@click.option("--tiers", default="1,2,3,4,6",
-              help="Comma-separated harvest tiers to loop (default 1,2,3,4,6).")
+@click.option("--tiers", default="1,2,3,4,6,7",
+              help="Comma-separated harvest tiers to loop (default 1,2,3,4,6,7).")
 @click.option("--harvest-interval-hours", type=float, default=24,
               help="Re-run discovery this often.")
 @click.option("--harvest-limit", type=int, default=None,

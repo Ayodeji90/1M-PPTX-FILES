@@ -11,7 +11,7 @@ import logging
 import re
 from collections.abc import AsyncIterator
 
-from .base import CandidateURL, Harvester, register
+from .base import CandidateURL, Harvester
 
 log = logging.getLogger("pptxsweeper.harvest.edgar")
 
@@ -22,9 +22,11 @@ _FORMS = "8-K,6-K"
 _DOC_OK_RE = re.compile(r"\.pptx?$", re.IGNORECASE)
 
 
-# Re-enabled 2026-07-03: client instruction now INCLUDES Fortune 500
-# companies, so no filer distinction is needed.
-@register
+# NOT registered: SEC EDGAR investor-presentation exhibits are filed as
+# .htm or .pdf, essentially never .ppt/.pptx, so a pptx-only filter yields
+# ~0 while consuming the full 10 req/s crawl budget. Corporate decks are
+# better reached via the IR harvester (Q4 CDN / events pages). Kept for
+# reference; re-@register only if the client accepts PDF exhibits.
 class EdgarHarvester(Harvester):
     name = "sec_edgar"
     tier = 2

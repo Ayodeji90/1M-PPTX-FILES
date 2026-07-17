@@ -235,8 +235,10 @@ class CommonCrawlHarvester(Harvester):
         from .seeds_util import tier1_seed_domains
         base = self.cfg.raw["common_crawl"]["cdx_fallback_base"].rstrip("/")
         api = f"{base}/{crawl_id}-index"
-        domains = tier1_seed_domains(self.cfg, self._reg())
-        log.info("crawl %s: CDX fallback across %d seed domains", crawl_id, len(domains))
+        domains = [d for d in tier1_seed_domains(self.cfg, self._reg())
+                   if self.owns_domain(d)]
+        log.info("crawl %s: CDX fallback across %d seed domains (node %d/%d)",
+                 crawl_id, len(domains), self.node.node_id, self.node.node_count)
         for domain in domains:
             for mime in PPT_MIMES:
                 page = 0

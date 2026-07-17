@@ -42,7 +42,9 @@ class WaybackCdxHarvester(Harvester):
             domains = tier1_seed_domains(self.cfg, reg)
         finally:
             reg.close()
-        log.info("wayback CDX: walking %d seed domains", len(domains))
+        domains = [d for d in domains if self.owns_domain(d)]
+        log.info("wayback CDX: walking %d seed domains owned by node %d/%d",
+                 len(domains), self.node.node_id, self.node.node_count)
 
         for domain in domains:
             for mime_filter in _MIME_FILTERS:
@@ -80,8 +82,18 @@ class WaybackCdxHarvester(Harvester):
                             continue
                         record = dict(zip(header, rec))
                         url = record.get("original", "")
-                        if not urlsplit(url).path.lower().endswith(
-                                PRESENTATION_EXTENSIONS):
+                        if not url:
+                            continue
+                        # The CDX query already filtered to PowerPoint MIME
+                        # types, so trust the capture even when the URL path
+                        # has no .ppt/.pptx suffix (e.g. /download?id=123 or
+                        # extensionless CMS routes). Only skip captures that
+                        # advertise a NON-presentation path extension, which
+                        # signals a mislabeled/served-as-other resource.
+                        path = urlsplit(url).path.lower()
+                        suffix = path.rsplit(".", 1)[-1] if "." in path.rsplit("/", 1)[-1] else ""
+                        if suffix and f".{suffix}" not in PRESENTATION_EXTENSIONS \
+                                and suffix in ("htm", "html", "pdf", "zip", "doc", "docx"):
                             continue
                         yield CandidateURL(
                             url=url, tier=self.tier, discovery_source="wayback_cdx",

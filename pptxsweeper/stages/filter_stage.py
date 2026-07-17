@@ -11,9 +11,25 @@ from ..db.dao import Registry
 
 log = logging.getLogger("pptxsweeper.filter")
 
+# Sources that verify the file format at DISCOVERY time (by MIME, API
+# filetype field, or repository file key) rather than by URL suffix.
+# Their download URLs are frequently extensionless (Figshare/OSF use
+# opaque /files/<id> routes; Wayback captures CMS /download?id= paths),
+# so the URL-suffix gate would wrongly drop them. The download stage's
+# magic-byte check is the authoritative format guard for these.
+_FORMAT_VERIFIED_SOURCES = (
+    "wayback", "zenodo", "figshare", "osf", "internet_archive", "ietf",
+    "govdata",
+)
+
+
 def _extension_ok(url: str, extensions: tuple[str, ...]) -> bool:
-    path = urlsplit(url).path.lower()
+    path = urlsplit(url).path.lower().split("?", 1)[0]
     return path.endswith(extensions)
+
+
+def _format_pre_verified(discovery_source: str) -> bool:
+    return discovery_source.startswith(_FORMAT_VERIFIED_SOURCES)
 
 
 def run_filter(cfg: Config, reg: Registry) -> dict:
@@ -36,7 +52,8 @@ def run_filter(cfg: Config, reg: Registry) -> dict:
 
     updates: list[tuple[int, dict]] = []
     for row in reg.conn.execute(
-        "SELECT id, url, domain, tier FROM urls WHERE status='discovered' ORDER BY id"
+        "SELECT id, url, domain, tier, discovery_source FROM urls "
+        "WHERE status='discovered' ORDER BY id"
     ).fetchall():
         stats["scanned"] += 1
         hit = blocklist.blocked(row["url"])
@@ -51,7 +68,8 @@ def run_filter(cfg: Config, reg: Registry) -> dict:
                                         "reject_reason": f"excluded_source:{excl}"}))
             stats["excluded_source"] = stats.get("excluded_source", 0) + 1
             continue
-        if not _extension_ok(row["url"], extensions):
+        if not _format_pre_verified(row["discovery_source"]) \
+                and not _extension_ok(row["url"], extensions):
             updates.append((row["id"], {"status": "filtered_out",
                                         "reject_reason": "extension"}))
             stats["bad_extension"] += 1

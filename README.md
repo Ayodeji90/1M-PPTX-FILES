@@ -11,6 +11,27 @@ URL filter, download magic-bytes, and classify).
 
 ---
 
+## 0. Starting fresh without re-downloading your existing files
+
+If you already collected files into another Drive folder, seed their
+SHA256 hashes so the pipeline never re-downloads that content — from ANY
+source (the same deck is often hosted on many sites, so avoiding sources
+is NOT enough; content-hash dedup is). Drive stores a SHA256 per file, so
+you don't have to download anything:
+
+```bash
+# 1. Pull the existing files' hashes straight off the old Drive folder:
+rclone hashsum sha256 gdrive_old:OldDeliveryFolder > prior_hashes.txt
+# 2. Seed them into the registry (they're now permanently skipped):
+.venv/bin/pptxsweeper import-catalog prior_hashes.txt
+```
+
+The downloader drops any payload whose SHA256 is already known, so overlap
+with the new sources is handled automatically. (Native `.pptx` dedups
+exactly; the minority that were `.ppt`→`.pptx` converted may download once
+before de-duping among themselves.) To also get search-engine coverage,
+set `BRAVE_API_KEY` in `.env` (see `.env.example`).
+
 ## 1. Run locally (this machine — already set up)
 
 ```bash

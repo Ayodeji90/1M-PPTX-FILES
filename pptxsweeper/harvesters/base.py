@@ -11,6 +11,7 @@ import httpx
 
 from ..config import Config
 from ..db.dao import Registry
+from ..node import NodeIdentity
 
 log = logging.getLogger("pptxsweeper.harvest")
 
@@ -44,6 +45,16 @@ class Harvester:
     def __init__(self, cfg: Config, client: httpx.AsyncClient):
         self.cfg = cfg
         self.client = client
+        self.node = NodeIdentity.from_env()
+
+    # -- multi-node discovery sharding (see NodeIdentity) -----------------
+    def owns_domain(self, domain: str) -> bool:
+        """Domain-list sources: only walk domains this node owns."""
+        return self.node.owns_domain(domain.lower().removeprefix("www."))
+
+    def owns_page(self, index: int) -> bool:
+        """Global paginated sources: only fetch pages this node owns."""
+        return self.node.owns_page(index)
 
     async def discover(self) -> AsyncIterator[CandidateURL]:  # pragma: no cover
         raise NotImplementedError

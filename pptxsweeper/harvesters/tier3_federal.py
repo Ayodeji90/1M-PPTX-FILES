@@ -23,6 +23,7 @@ class FederalSitemapHarvester(Harvester):
     async def discover(self) -> AsyncIterator[CandidateURL]:
         t3 = self.cfg.raw["harvesters"]["tier3"]
         domains = list(t3["sitemap_domains"]) + list(t3["fed_regional_banks"])
+        domains = [d for d in domains if self.owns_domain(d)]
         for domain in domains:
             count = 0
             async for url in walk_domain_sitemaps(self, domain, DOC_EXTENSIONS,

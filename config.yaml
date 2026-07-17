@@ -57,7 +57,10 @@ download:
   min_content_length_kb: 10
   connect_timeout_s: 15
   read_timeout_s: 90
-  concurrency: 150
+  # Async I/O-bound: workers each hold ONE domain at a time from a shared
+  # queue, so effective parallelism = min(concurrency, #domains). 300 is
+  # comfortable on a 2 vCPU VM; the httpx pool is sized to match.
+  concurrency: 300
   # Downloads pause when free disk falls below this. 5 suits a laptop
   # (payloads are uploaded to Drive and deleted every batch); raise to
   # 20+ on a production VM with a dedicated disk.
@@ -77,8 +80,19 @@ politeness:
   # Big archives that comfortably serve faster than small org sites.
   # Matched by domain suffix; value = seconds between requests.
   domain_delay_overrides:
+    # High-throughput archive/CDN infrastructure built to serve fast.
     archive.org: 0.5
     web.archive.org: 0.5
+    data.commoncrawl.org: 0.5
+    index.commoncrawl.org: 0.5
+    zenodo.org: 1.0
+    ndownloader.figshare.com: 1.0
+    files.osf.io: 1.0
+    # Standards bodies: moderate (large but org-run).
+    3gpp.org: 1.0
+    www.3gpp.org: 1.0
+    ietf.org: 1.0
+    www.ietf.org: 1.0
   circuit_breaker:
     backoff_stages_s: [30, 300, 1800]   # 30s -> 5min -> 30min
     park_after_consecutive_failures: 3
@@ -205,6 +219,69 @@ harvesters:
     osf_api: "https://api.osf.io/v2/search/"
     ia_api: "https://archive.org/advancedsearch.php"
     github_code_search_api: "https://api.github.com/search/code"
+  tier7:
+    # Open-web filetype dorking via Brave Search API. Set BRAVE_API_KEY
+    # in .env. Each filetype is paired with the broadening terms below to
+    # push past Brave's ~200-results-per-query ceiling; extend freely.
+    brave:
+      api: "https://api.search.brave.com/res/v1/web/search"
+      results_per_query: 20      # Brave hard max per request
+      max_offset: 9              # Brave hard max -> 200 results/query
+      delay_s: 1.1               # free tier ~1 req/s
+      queries:
+        - ""                     # bare filetype:pptx
+        - "lecture"
+        - "training"
+        - "results presentation"
+        - "annual report"
+        - "conference"
+        - "workshop"
+        - "overview"
+        - "roadmap"
+        - "case study"
+        - "seminar"
+        - "webinar"
+        - "tutorial"
+        - "strategy"
+        - "financial results"
+        - "budget"
+        - "research"
+        - "guidelines"
+        - "site:edu"
+        - "site:gov"
+        - "site:org"
+        - "site:ac.uk"
+    # Standards / conference bodies: browsable autoindex directory trees
+    # of directly-downloadable .ppt/.pptx.
+    standards:
+      delay_s: 1.5
+      max_dirs_per_root: 4000
+      max_depth: 8
+      autoindex_roots:
+        - "https://www.3gpp.org/ftp/"
+        - "https://www.ietf.org/proceedings/"
+        - "https://docs.oasis-open.org/"
+        - "https://www.open-std.org/"
+        - "https://www.ieee802.org/"
+    # Government / EU open-data portals running CKAN (res_format filter).
+    govdata:
+      delay_s: 1.5
+      rows: 100
+      max_pages_per_portal: 100
+      ckan_portals:
+        - "https://catalog.data.gov"
+        - "https://data.gov.uk"
+        - "https://open.canada.ca/data/en"
+        - "https://data.gov.au"
+        - "https://datos.gob.es"
+        - "https://data.gov.ie"
+        - "https://opendata.swiss"
+        - "https://www.dati.gov.it"
+        - "https://data.overheid.nl"
+        - "https://www.govdata.de/ckan"
+        - "https://data.gov.gr"
+        - "https://data.gov.sk"
+        - "https://data.gov.cz"
 
 multi_node:
   # Work is split across machines by hash(domain) % NODE_COUNT == NODE_ID

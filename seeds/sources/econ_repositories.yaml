@@ -1,0 +1,33 @@
+# Economics / policy working-paper networks + open repositories.
+#
+# These are DSpace/EPrints repositories where presentation decks are
+# common. We harvest them two ways:
+#   1. here, via sitemap discovery (this file), and
+#   2. as domain seeds for the Wayback CDX tier (seeds/cdx_domains.txt),
+#      which is MIME-accurate and catches files sitemaps omit.
+# OAI-PMH is intentionally NOT used for these: their oai_dc records point
+# at landing pages / PDF bitstreams, not .ppt/.pptx files.
+- name: econstor
+  domain: www.econstor.eu
+  tier: 4
+  method: sitemap
+  url: https://www.econstor.eu/sitemap
+  delay_s: 3.0
+- name: ageconsearch
+  domain: ageconsearch.umn.edu
+  tier: 4
+  method: sitemap
+  url: https://ageconsearch.umn.edu/sitemap
+  delay_s: 3.0
+- name: repec_econpapers
+  domain: econpapers.repec.org
+  tier: 4
+  method: sitemap
+  url: https://econpapers.repec.org/sitemap.xml
+  delay_s: 3.0
+- name: oecd_ilibrary
+  domain: www.oecd-ilibrary.org
+  tier: 4
+  method: sitemap
+  url: https://www.oecd-ilibrary.org/sitemap.xml
+  delay_s: 3.0

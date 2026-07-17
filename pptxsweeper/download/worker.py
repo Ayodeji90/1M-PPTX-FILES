@@ -105,13 +105,30 @@ class DownloadStage:
         self._cleanup_stale_parts()
         self._recover_stale_claims()
 
-        domains = self.node.filter_domains(self.reg.distinct_domains("discovered"))
+        # NOTE: discovery is already node-sharded (see NodeIdentity /
+        # harvesters), so every domain in THIS node's local registry is
+        # ours to download -- domain-list sources were sharded by domain,
+        # global/aggregator sources (Zenodo, IA, Brave, ...) by page, and
+        # each node keeps its own DB. Re-sharding by domain here would drop
+        # the global-source URLs (whose single domain hashes to one node)
+        # that this node legitimately discovered, so we do NOT filter.
+        domains = self.reg.distinct_domains("discovered")
         if not domains:
-            log.info("no domains with discovered URLs for this node; nothing to do")
+            log.info("no domains with discovered URLs; nothing to do")
             return self.stats
-        shards = self._shard_domains(domains)
+        # Dynamic work queue: up to `concurrency` domains are in flight at
+        # once, each handled by exactly one worker at a time (politeness
+        # preserved), and a domain is re-enqueued to the BACK after each
+        # batch so all domains round-robin fairly. This keeps every worker
+        # busy on a DIFFERENT domain instead of one worker serially walking
+        # a static shard of domains (whose per-domain delays never overlap).
+        self._domain_queue: asyncio.Queue[str] = asyncio.Queue()
+        for domain in sorted(domains):
+            self._domain_queue.put_nowait(domain)
+        self._active_domains = 0
+        n_workers = min(self.concurrency, len(domains))
         log.info("downloading from %d domains across %d workers (node %d/%d)%s",
-                 len(domains), len(shards), self.node.node_id, self.node.node_count,
+                 len(domains), n_workers, self.node.node_id, self.node.node_count,
                  " [DRY RUN]" if self.dry_run else "")
 
         self.client = build_client(
@@ -134,7 +151,7 @@ class DownloadStage:
         self.writer.start()
         grace = float(self.cfg.raw["download"].get("shutdown_grace_s", 30))
         workers = asyncio.gather(
-            *(self._worker(i, shard) for i, shard in enumerate(shards)),
+            *(self._worker(i) for i in range(n_workers)),
             return_exceptions=True,
         )
         stop_waiter = asyncio.create_task(self.stop_event.wait())
@@ -197,37 +214,33 @@ class DownloadStage:
                     (utcnow(),),
                 )
 
-    def _shard_domains(self, domains: list[str]) -> list[list[str]]:
-        n = min(self.concurrency, len(domains))
-        shards: list[list[str]] = [[] for _ in range(n)]
-        for domain in sorted(domains):
-            shards[self._stable_shard(domain, n)].append(domain)
-        return [s for s in shards if s]
-
-    @staticmethod
-    def _stable_shard(domain: str, n: int) -> int:
-        import hashlib
-        return int.from_bytes(hashlib.sha1(domain.encode()).digest()[:4], "big") % n
-
     # ------------------------------------------------------------------
-    async def _worker(self, worker_id: int, domains: list[str]) -> None:
-        log.debug("worker %d starting with %d domains", worker_id, len(domains))
-        active = {d: True for d in domains}
-        while not self.stop_event.is_set() and any(active.values()):
-            for domain in domains:
-                if self.stop_event.is_set():
-                    break
-                if not active[domain]:
-                    continue
+    async def _worker(self, worker_id: int) -> None:
+        """Pull a domain off the shared queue, download one polite batch
+        from it, then re-enqueue it if it still has URLs. A domain is only
+        ever held by one worker at a time, so per-domain serialism (and
+        thus politeness) is preserved while up to `concurrency` DIFFERENT
+        domains download in parallel."""
+        queue = self._domain_queue
+        while not self.stop_event.is_set():
+            try:
+                domain = await asyncio.wait_for(queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                # No domain waiting. If nothing is in flight either, the
+                # run is drained -> exit; otherwise loop and wait again.
+                if queue.empty() and self._active_domains == 0:
+                    log.debug("worker %d exiting: work queue drained", worker_id)
+                    return
+                continue
+            self._active_domains += 1
+            try:
                 rows = await self.writer.call(
                     self.reg.claim_urls, [domain], self.claim_batch_size
                 )
                 if not rows:
-                    active[domain] = False
-                    continue
+                    continue        # domain exhausted: drop it (don't requeue)
                 for row in rows:
                     if self.stop_event.is_set():
-                        # un-claim gracefully; finish nothing new
                         self.writer.update_url(row["id"], status="discovered")
                         continue
                     try:
@@ -235,9 +248,11 @@ class DownloadStage:
                     except Exception:
                         log.exception("unexpected error processing %s", row["url"])
                         self.writer.update_url(row["id"], status="discovered")
-            # domains exhausted this round; small breather before rescan
-            if any(active.values()):
-                await asyncio.sleep(0.1)
+                if not self.stop_event.is_set():
+                    queue.put_nowait(domain)   # more may remain: round-robin
+            finally:
+                self._active_domains -= 1
+                queue.task_done()
 
     # ------------------------------------------------------------------
     async def _process_url(self, row: dict) -> None:
