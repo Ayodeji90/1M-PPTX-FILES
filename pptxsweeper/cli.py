@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 
 import click
 
@@ -47,6 +48,17 @@ def _rclone(cfg: Config):
                   retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]))
 
 
+def _rclone_handoff(cfg: Config):
+    """Rclone rooted at the FIXED, shared handoff folder (independent of
+    each VM's own delivery root) so producer and consumer meet there."""
+    from .packager.rclone import Rclone
+    rc = cfg.raw["rclone"]
+    root = cfg.raw["multi_node"].get("handoff_root", "PptxSweeper_Handoff")
+    return Rclone(bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=root,
+                  retries=int(cfg.raw["upload"]["max_retries"]),
+                  retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]))
+
+
 @click.group()
 def main() -> None:
     """PptxSweeper: million-scale presentation acquisition pipeline."""
@@ -62,8 +74,14 @@ def main() -> None:
               help="Cap candidates per source per pass (for testing).")
 @click.option("--with-commoncrawl", is_flag=True,
               help="Also scan the Common Crawl index (slow; near-zero ppt/pptx yield).")
+@click.option("--no-harvest", is_flag=True,
+              help="Download-only mode: skip discovery (for a consumer VM fed via handoff).")
+@click.option("--handoff", type=click.Choice(["producer", "consumer", "none"]),
+              default="none",
+              help="Enable URL handoff: 'producer' exports a share of discovered "
+                   "URLs to Drive; 'consumer' imports them (pair with --no-harvest).")
 def run(tiers: str, harvest_interval_hours: float, harvest_limit: int | None,
-        with_commoncrawl: bool) -> None:
+        with_commoncrawl: bool, no_harvest: bool, handoff: str) -> None:
     """EVERYTHING with one command: find URLs, download, quality-check,
     and continuously upload finished batches to Google Drive. Ctrl+C to
     stop; re-running resumes exactly where it left off."""
@@ -74,7 +92,8 @@ def run(tiers: str, harvest_interval_hours: float, harvest_limit: int | None,
         raise SystemExit(1)
     tier_list = [int(t) for t in tiers.split(",") if t.strip()]
     orch = Orchestrator(cfg, tier_list, harvest_interval_hours, harvest_limit,
-                        with_commoncrawl=with_commoncrawl)
+                        with_commoncrawl=with_commoncrawl,
+                        no_harvest=no_harvest, handoff_role=handoff)
     print(f"Pipeline running; Ctrl+C to stop. Stage logs: data/logs/*.jsonl\n"
           f"Harvest order: {', '.join(orch.harvest_sources)}")
     orch.run()
@@ -231,6 +250,65 @@ def promote_review_cmd(stream: bool, quality_only: bool, dry_run: bool) -> None:
         from .packager.package_stage import PackageStage
         result = PackageStage(cfg, reg).stream_upload()
         click.echo(json.dumps(result, indent=2))
+
+
+# ----------------------------------------------------------------------
+@main.command("export-urls")
+@click.option("--fraction", type=float, default=0.6, show_default=True,
+              help="Share of the discovered backlog to hand to the consumer node.")
+@click.option("--out", "out_path", default=None,
+              help="Local CSV path (default: data/tmp_downloads/_handoff/<node>_<ts>.csv).")
+@click.option("--limit", type=int, default=None, help="Cap exported rows (testing).")
+@click.option("--to-drive/--no-to-drive", default=True,
+              help="Also upload the CSV to the Drive _handoff/ folder (default).")
+def export_urls_cmd(fraction: float, out_path: str | None, limit: int | None,
+                    to_drive: bool) -> None:
+    """Producer: hand a deterministic fraction of discovered URLs to the
+    consumer node (marks them handed-off so THIS node won't download them)."""
+    cfg, reg = _boot("export_urls")
+    node = NodeIdentity.from_env()
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    name = f"node{node.node_id}_{ts}.csv"
+    if out_path is None:
+        out_path = str(cfg.path("paths", "download_tmp_dir") / "_handoff" / name)
+    from .stages.handoff import export_urls
+    stats = export_urls(reg, fraction=fraction, out_path=out_path, limit=limit)
+    if to_drive and stats["exported"]:
+        rc = _rclone_handoff(cfg)
+        rc.mkdir()
+        rc.copy_file(Path(out_path), dest_name=name)
+        stats["drive"] = f"{cfg.raw['multi_node'].get('handoff_root')}/{name}"
+    click.echo(json.dumps(stats, indent=2))
+
+
+@main.command("import-urls")
+@click.argument("path", type=click.Path(exists=True), required=False)
+@click.option("--from-drive/--no-from-drive", default=True,
+              help="Pull handoff CSVs from the Drive _handoff/ folder (default).")
+def import_urls_cmd(path: str | None, from_drive: bool) -> None:
+    """Consumer: import handed-off URLs into this node's registry."""
+    cfg, reg = _boot("import_urls")
+    from .stages.handoff import import_urls
+    node = NodeIdentity.from_env()
+    totals = {"read": 0, "new": 0, "files": 0}
+    if path:
+        s = import_urls(reg, path)
+        totals["read"] += s["read"]; totals["new"] += s["new"]; totals["files"] += 1
+    if from_drive:
+        rclone = _rclone_handoff(cfg)
+        local_dir = cfg.path("paths", "download_tmp_dir") / "_handoff_in"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        for entry in rclone.lsjson():
+            fname = entry.get("Name", "")
+            # skip CSVs this node produced itself
+            if not fname.endswith(".csv") or fname.startswith(f"node{node.node_id}_"):
+                continue
+            rclone.download_file((fname,), local_dir)
+            s = import_urls(reg, local_dir / fname)
+            totals["read"] += s["read"]; totals["new"] += s["new"]; totals["files"] += 1
+            rclone.delete_file(fname)   # consumed: don't re-import
+            (local_dir / fname).unlink(missing_ok=True)
+    click.echo(json.dumps(totals, indent=2))
 
 
 # ----------------------------------------------------------------------

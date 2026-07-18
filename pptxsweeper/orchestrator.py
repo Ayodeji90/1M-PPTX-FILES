@@ -65,10 +65,16 @@ HARVEST_PRIORITY = [
 
 class Orchestrator:
     def __init__(self, cfg: Config, tiers: list[int], harvest_interval_h: float,
-                 harvest_limit: int | None = None, with_commoncrawl: bool = False):
+                 harvest_limit: int | None = None, with_commoncrawl: bool = False,
+                 no_harvest: bool = False, handoff_role: str = "none"):
         self.cfg = cfg
         self.harvest_interval_s = harvest_interval_h * 3600
         self.harvest_limit = harvest_limit
+        self.no_harvest = no_harvest
+        self.handoff_role = handoff_role   # 'producer' | 'consumer' | 'none'
+        mn = cfg.raw.get("multi_node", {})
+        self.handoff_interval_s = float(mn.get("handoff_interval_hours", 10)) * 3600
+        self.handoff_fraction = float(mn.get("handoff_fraction", 0.6))
         self.stop = threading.Event()
         self._children: dict[str, subprocess.Popen] = {}
         self._lock = threading.Lock()
@@ -164,6 +170,21 @@ class Orchestrator:
         except sqlite3.Error:
             return {"s": {}, "delivered": 0, "batches": 0}
 
+    def handoff_loop(self) -> None:
+        """Producer exports a share of discovered URLs to Drive; consumer
+        imports handed-off URLs from Drive. Runs on handoff_interval."""
+        # Consumer imports promptly on startup so it has work immediately;
+        # producer waits one interval so a backlog has accumulated.
+        if self.handoff_role == "producer":
+            self._sleep(self.handoff_interval_s)
+        while not self.stop.is_set():
+            if self.handoff_role == "producer":
+                self._stage("export-urls", "export-urls",
+                            "--fraction", str(self.handoff_fraction))
+            elif self.handoff_role == "consumer":
+                self._stage("import-urls", "import-urls")
+            self._sleep(self.handoff_interval_s)
+
     def monitor_loop(self) -> None:
         while not self.stop.is_set():
             c = self._counts()
@@ -190,11 +211,16 @@ class Orchestrator:
         signal.signal(signal.SIGINT, self.shutdown)
         signal.signal(signal.SIGTERM, self.shutdown)
         threads = [
-            threading.Thread(target=self.harvest_loop, name="harvest", daemon=True),
             threading.Thread(target=self.download_loop, name="download", daemon=True),
             threading.Thread(target=self.deliver_loop, name="deliver", daemon=True),
             threading.Thread(target=self.monitor_loop, name="monitor", daemon=True),
         ]
+        if not self.no_harvest:
+            threads.insert(0, threading.Thread(target=self.harvest_loop,
+                                               name="harvest", daemon=True))
+        if self.handoff_role in ("producer", "consumer"):
+            threads.append(threading.Thread(target=self.handoff_loop,
+                                            name="handoff", daemon=True))
         for t in threads:
             t.start()
         while not self.stop.is_set():

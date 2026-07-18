@@ -53,6 +53,44 @@ them.**
 Discovery is now sharded at harvest time, so no two machines crawl the
 same domain/page — no duplicate work, no duplicate uploads.
 
+## 2b. Second VM as a download-only consumer (URL handoff)
+
+Instead of the symmetric node-split, you can run VM2 as a pure
+**consumer**: it does no discovery, takes a share of VM1's already-found
+URLs, and delivers to its **own folder** on the same Drive account.
+
+On **VM1 (producer)** — keep it harvesting, and have it hand off a share:
+```bash
+# .env: normal setup (NODE_ID=0, NODE_COUNT=1 is fine here)
+pm2 start ./.venv/bin/pptxsweeper --name sweeper --interpreter none \
+  --kill-timeout 90000 -- run --handoff producer
+```
+
+On **VM2 (consumer)** — its own delivery folder, no harvesting:
+```bash
+# .env: set a distinct delivery folder and a different node id
+#   RCLONE_ROOT_FOLDER=PptxSweeper_Delivery_VM2
+#   NODE_ID=1        NODE_COUNT=2
+pm2 start ./.venv/bin/pptxsweeper --name sweeper --interpreter none \
+  --kill-timeout 90000 -- run --no-harvest --handoff consumer
+```
+
+How it works: every `multi_node.handoff_interval_hours` (default 10),
+VM1 exports `handoff_fraction` (default 0.6 = 60%) of its *discovered*
+backlog to a shared Drive folder `PptxSweeper_Handoff/` and marks those
+URLs handed-off so **VM1 never downloads them**. VM2 imports them and
+downloads/validates/delivers to `PptxSweeper_Delivery_VM2/`. Selection is
+a stable URL hash, so the same 60% always goes to VM2 and nothing is
+handed twice. Tune the split/interval in `config.yaml` under `multi_node`.
+
+You can also run it by hand:
+```bash
+# on VM1:
+./.venv/bin/pptxsweeper export-urls --fraction 0.6
+# on VM2:
+./.venv/bin/pptxsweeper import-urls
+```
+
 ## 3. GCP VM sizing
 
 `e2-standard-2` (2 vCPU / 8 GB), Ubuntu 22.04/24.04, 50–100 GB disk. The

@@ -294,6 +294,14 @@ multi_node:
   # therefore a URL -- is only ever processed by one machine.
   dedup_folder: _dedup            # on Drive, under the delivery root
   dedup_sync_interval_min: 60     # upload own hashes / import peers' hashes
+  # Producer->consumer URL handoff (a download-only VM that takes a share
+  # of another VM's discovered URLs instead of harvesting its own). The
+  # CSV exchange goes through a FIXED top-level Drive folder (NOT under a
+  # per-VM delivery root, since producer and consumer deliver to different
+  # folders) so both machines see the same exchange point.
+  handoff_root: PptxSweeper_Handoff
+  handoff_interval_hours: 10      # producer exports / consumer imports this often
+  handoff_fraction: 0.6           # share handed to the consumer
   # Batch numbers are interleaved so they are globally unique with no
   # coordination: node k of N creates batches k+1, k+1+N, k+1+2N, ...
   interleave_batch_ids: true
