@@ -123,6 +123,12 @@ class Config:
     def rclone_remote(self) -> str:
         return os.environ.get("RCLONE_REMOTE", self.raw["rclone"]["remote_name"])
 
+    def rclone_root_folder(self) -> str:
+        """Delivery folder on Drive. Per-machine override via RCLONE_ROOT_FOLDER
+        lets each VM deliver into its own folder on the SAME account (falls
+        back to rclone.root_folder in config.yaml)."""
+        return os.environ.get("RCLONE_ROOT_FOLDER", self.raw["rclone"]["root_folder"])
+
 
 def _find_project_root(start: Path, config_filename: str) -> Path:
     cur = start.resolve()

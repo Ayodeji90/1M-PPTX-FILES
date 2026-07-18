@@ -70,6 +70,29 @@ def manifest_row(file_row: dict) -> dict:
     }
 
 
+def metadata_record(file_row: dict) -> dict:
+    """Full per-file sidecar record: the manifest row plus quality
+    explanations/metrics, OOXML doc properties, and the raw crawl
+    metadata. Shared by delivered-file and review-file sidecars."""
+    record = manifest_row(file_row)
+    try:
+        quality_report = json.loads(file_row.get("quality_report") or "{}")
+    except (ValueError, TypeError):
+        quality_report = {}
+    record["quality_explanations"] = quality_report.get("explanations", [])
+    record["quality_metrics"] = {
+        k: quality_report.get(k) for k in
+        ("analytical_pct", "chart_diagram_pages", "photo_heavy_pct",
+         "text_only_pct", "content_slide_count")
+    }
+    record["doc_properties"] = quality_report.get("doc_properties", {})
+    try:
+        record["raw_metadata"] = json.loads(file_row.get("url_metadata") or "{}")
+    except (ValueError, TypeError):
+        record["raw_metadata"] = {}
+    return record
+
+
 def write_manifest(rows: list[dict], out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="", encoding="utf-8") as fh:

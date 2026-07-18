@@ -42,7 +42,7 @@ def _rclone(cfg: Config):
     from .packager.rclone import Rclone
     rc = cfg.raw["rclone"]
     return Rclone(bin=rc["bin"], remote=cfg.rclone_remote(),
-                  root_folder=rc["root_folder"],
+                  root_folder=cfg.rclone_root_folder(),
                   retries=int(cfg.raw["upload"]["max_retries"]),
                   retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]))
 
@@ -209,6 +209,28 @@ def import_catalog_cmd(path: str) -> None:
     cfg, reg = _boot("import_catalog")
     from .catalog_import import import_catalog
     click.echo(json.dumps(import_catalog(reg, path), indent=2))
+
+
+# ----------------------------------------------------------------------
+@main.command("promote-review")
+@click.option("--stream/--no-stream", default=True,
+              help="Also upload the promoted files immediately (default).")
+@click.option("--quality-only", is_flag=True,
+              help="Keep compliance-flagged (PII/minors/rights) files in review; "
+                   "promote only quality-borderline ones.")
+@click.option("--dry-run", is_flag=True, help="Report what would be promoted; no changes.")
+def promote_review_cmd(stream: bool, quality_only: bool, dry_run: bool) -> None:
+    """Promote manually-approved REVIEW files into the open batch,
+    continuing its numbering and writing sidecars (reuses the local
+    review payloads; no re-download)."""
+    cfg, reg = _boot("promote_review")
+    from .stages.review_promote import promote_review
+    stats = promote_review(reg, only_quality_borderline=quality_only, dry_run=dry_run)
+    click.echo(json.dumps(stats, indent=2))
+    if stream and not dry_run and stats.get("promoted"):
+        from .packager.package_stage import PackageStage
+        result = PackageStage(cfg, reg).stream_upload()
+        click.echo(json.dumps(result, indent=2))
 
 
 # ----------------------------------------------------------------------

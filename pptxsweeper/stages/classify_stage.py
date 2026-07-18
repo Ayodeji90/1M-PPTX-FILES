@@ -298,9 +298,37 @@ class ClassifyStage:
         self.stats["reject"] += 1
 
     # ------------------------------------------------------------------
+    def _write_review_sidecars(self) -> int:
+        """Write a {sha}.metadata.json next to each local review payload so
+        the Drive _review/ folder carries full metadata (source URL,
+        quality report, doc properties, compliance, raw crawl record)."""
+        from ..packager.manifest import metadata_record
+        rows = self.reg.conn.execute(
+            """SELECT f.*, u.url AS source_url, u.domain AS source_domain,
+                      u.created_at AS collection_ts, u.http_status,
+                      u.robots_status, u.retrieval_method,
+                      u.metadata AS url_metadata
+               FROM files f JOIN urls u ON u.id = f.url_id
+               WHERE f.decision='REVIEW' AND f.delivered_at IS NULL
+                 AND u.status='review'"""
+        ).fetchall()
+        written = 0
+        for r in rows:
+            rd = dict(r)
+            if not rd.get("sha256") or not rd.get("format"):
+                continue
+            record = metadata_record(rd)
+            record["final_status"] = "review"
+            sidecar = self.review_dir / f"{rd['sha256']}.metadata.json"
+            sidecar.write_text(json.dumps(record, indent=2, default=str),
+                               encoding="utf-8")
+            written += 1
+        return written
+
     def sync_review_to_drive(self, rclone) -> None:
         """Sync review/ to Drive _review/ and prune local payloads to cap."""
         review_folder = self.cfg.raw["rclone"]["review_folder"]
+        self._write_review_sidecars()
         rclone.mkdir(review_folder)
         rclone.copy_dir(self.review_dir, review_folder)
         if not rclone.check(self.review_dir, review_folder,

@@ -166,6 +166,11 @@ classify:
   commit_every: 50
   workers: 0               # 0 = one per CPU core (parallel quality engine)
   chunk_limit: 150         # files per classify pass, so uploads interleave
+  # Auto-promote manually-approved review files into delivery every N
+  # hours (0 disables). Promotes BOTH quality-borderline and
+  # compliance-flagged files; run `promote-review --quality-only` by hand
+  # if you'd rather hold compliance-flagged ones for manual triage.
+  review_auto_promote_hours: 2
 
 filter:
   per_domain_cap: 20000

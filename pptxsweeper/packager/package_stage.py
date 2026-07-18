@@ -30,7 +30,7 @@ from ..naming import BatchAllocator, manifest_filename
 from ..node import NodeIdentity
 from ..utils.hashing import sha256_file
 from .compose import deliverable_candidates, select_for_batch, Selection
-from .manifest import manifest_row, write_manifest
+from .manifest import manifest_row, metadata_record, write_manifest
 from .rclone import Rclone
 
 log = logging.getLogger("pptxsweeper.packager")
@@ -49,7 +49,7 @@ class PackageStage:
         self.node = node or NodeIdentity.from_env()
         rc = cfg.raw["rclone"]
         self.rclone = rclone or Rclone(
-            bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=rc["root_folder"],
+            bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=cfg.rclone_root_folder(),
             retries=int(cfg.raw["upload"]["max_retries"]),
             retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]),
         )
@@ -469,24 +469,9 @@ class PackageStage:
         crash-resume simply regenerates it."""
         stem = Path(r["delivered_filename"]).stem
         sidecar = local_batch / f"{stem}.metadata.json"
-        record = manifest_row(r)
-        try:
-            quality_report = json.loads(r.get("quality_report") or "{}")
-        except (ValueError, TypeError):
-            quality_report = {}
-        record["quality_explanations"] = quality_report.get("explanations", [])
-        record["quality_metrics"] = {
-            k: quality_report.get(k) for k in
-            ("analytical_pct", "chart_diagram_pages", "photo_heavy_pct",
-             "text_only_pct", "content_slide_count")
-        }
-        # Client criteria: retain ALL metadata. Document properties
-        # (title/author/organization/dates) + full crawl/discovery record.
-        record["doc_properties"] = quality_report.get("doc_properties", {})
-        try:
-            record["raw_metadata"] = json.loads(r.get("url_metadata") or "{}")
-        except (ValueError, TypeError):
-            record["raw_metadata"] = {}
+        # Client criteria: retain ALL metadata (doc properties + full crawl
+        # record). Deterministic, so a crash-resume regenerates it.
+        record = metadata_record(r)
         sidecar.write_text(json.dumps(record, indent=2, default=str),
                            encoding="utf-8")
 

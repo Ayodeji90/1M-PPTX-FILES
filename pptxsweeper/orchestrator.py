@@ -129,8 +129,16 @@ class Orchestrator:
     def deliver_loop(self) -> None:
         node = NodeIdentity.from_env()
         last_dedup = 0.0
+        last_promote = 0.0
+        promote_interval_s = float(self.cfg.raw.get("classify", {})
+                                   .get("review_auto_promote_hours", 2)) * 3600
         while not self.stop.is_set():
             self._stage("classify", "classify")
+            # Auto-promote manually-approved review backlog on an interval;
+            # the package --stream below then delivers them this cycle.
+            if promote_interval_s > 0 and time.time() - last_promote > promote_interval_s:
+                self._stage("promote-review", "promote-review", "--no-stream")
+                last_promote = time.time()
             # streaming: every qualifying file goes to Drive immediately
             self._stage("package", "package", "--stream")
             self._stage("status", "status", "--sync")
@@ -207,7 +215,7 @@ def preflight(cfg: Config) -> Rclone | None:
     """Verify Google Drive is reachable and create the delivery folder."""
     rc_cfg = cfg.raw["rclone"]
     rclone = Rclone(bin=rc_cfg["bin"], remote=cfg.rclone_remote(),
-                    root_folder=rc_cfg["root_folder"])
+                    root_folder=cfg.rclone_root_folder())
     if not rclone.available():
         print("ERROR: rclone is not installed. Install it:  sudo apt install rclone")
         return None
