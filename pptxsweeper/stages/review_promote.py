@@ -63,16 +63,27 @@ def promote_review_from_drive(cfg, reg: Registry, rclone, node=None,
     batch = dict(allocator.open_batch())
     batch_id, folder = batch["batch_id"], batch["folder_name"]
     tmpdir = Path(tempfile.mkdtemp(prefix="review_promote_"))
-    stats = {"pending": len(rows), "promoted": 0, "missing": 0, "errors": 0}
+    # List the _review folder ONCE and map sha -> actual payload filename
+    # (rclone can't stat a single Drive file reliably; and this avoids a
+    # per-file API call). Matching by sha prefix handles .pptx vs .ppt.
+    payload_by_sha: dict[str, str] = {}
+    for e in rclone.lsjson(review_folder):
+        name = e.get("Name", "")
+        if name and not name.endswith(".metadata.json"):
+            payload_by_sha[name.rsplit(".", 1)[0]] = name
+    log.info("_review holds %d payloads on Drive; %d pending to place",
+             len(payload_by_sha), len(rows))
+    stats = {"pending": len(rows), "drive_review_payloads": len(payload_by_sha),
+             "promoted": 0, "missing": 0, "errors": 0}
 
     for r in rows:
         sha = r["sha256"]
-        ext = "pptx" if r["converted_from_ppt"] else (r["format"] or "pptx")
-        payload_name = f"{sha}.{ext}"
+        payload_name = payload_by_sha.get(sha)
         # Skip (don't burn a filename) if the payload isn't in _review.
-        if not rclone.exists(review_folder, payload_name):
+        if not payload_name:
             stats["missing"] += 1
             continue
+        ext = payload_name.rsplit(".", 1)[-1]
         try:
             delivered = allocator.assign_filename(batch_id, r["file_id"], ext)
             stem = delivered.rsplit(".", 1)[0]
