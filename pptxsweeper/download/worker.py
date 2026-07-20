@@ -71,6 +71,11 @@ class DownloadStage:
         self.max_bytes = int(dl["max_content_length_mb"]) * 1024 * 1024
         self.min_bytes = int(dl["min_content_length_kb"]) * 1024
         self.min_free_gb = float(dl["min_free_disk_gb"])
+        # Backlog cap: stop claiming new URLs once this many are sitting in
+        # 'downloaded' (payloads on disk waiting for classify). Keeps the
+        # download stage from outrunning classify and filling the disk.
+        self.max_backlog = int(dl.get("max_downloaded_backlog", 0))
+        self._backlog_paused = asyncio.Event()
         self.head_before_get = bool(cfg.raw["politeness"]["head_before_get"])
         self.wayback_enabled = bool(dl.get("wayback_fallback", True))
         self.tmp_dir = cfg.path("paths", "download_tmp_dir")
@@ -150,6 +155,7 @@ class DownloadStage:
 
         self.writer.start()
         grace = float(self.cfg.raw["download"].get("shutdown_grace_s", 30))
+        backlog_task = asyncio.create_task(self._backlog_monitor())
         workers = asyncio.gather(
             *(self._worker(i) for i in range(n_workers)),
             return_exceptions=True,
@@ -173,6 +179,7 @@ class DownloadStage:
                         pass
         finally:
             stop_waiter.cancel()
+            backlog_task.cancel()
             await self.writer.stop()
             await self.client.aclose()
         log.info("download stage done: %s", self.stats)
@@ -215,6 +222,25 @@ class DownloadStage:
                 )
 
     # ------------------------------------------------------------------
+    async def _backlog_monitor(self) -> None:
+        """Pause claiming when too many payloads are waiting for classify.
+        Runs in the download process; classify (a separate process) drains
+        'downloaded' rows, so the count drops and downloads resume. This
+        bounds tmp_downloads so the disk can never fill."""
+        if not self.max_backlog:
+            return
+        while not self.stop_event.is_set():
+            n = await self.writer.call(self.reg.count_by_status, "downloaded")
+            if n >= self.max_backlog:
+                if not self._backlog_paused.is_set():
+                    log.warning("downloaded backlog %d >= cap %d; pausing downloads "
+                                "until classify catches up", n, self.max_backlog)
+                    self._backlog_paused.set()
+            elif self._backlog_paused.is_set() and n <= self.max_backlog * 0.8:
+                log.info("downloaded backlog %d back under cap; resuming downloads", n)
+                self._backlog_paused.clear()
+            await asyncio.sleep(15)
+
     async def _worker(self, worker_id: int) -> None:
         """Pull a domain off the shared queue, download one polite batch
         from it, then re-enqueue it if it still has URLs. A domain is only
@@ -223,6 +249,9 @@ class DownloadStage:
         domains download in parallel."""
         queue = self._domain_queue
         while not self.stop_event.is_set():
+            if self._backlog_paused.is_set():
+                await asyncio.sleep(2)   # classify is behind; hold off claiming
+                continue
             try:
                 domain = await asyncio.wait_for(queue.get(), timeout=1.0)
             except asyncio.TimeoutError:

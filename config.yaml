@@ -58,9 +58,16 @@ download:
   connect_timeout_s: 15
   read_timeout_s: 90
   # Async I/O-bound: workers each hold ONE domain at a time from a shared
-  # queue, so effective parallelism = min(concurrency, #domains). 300 is
-  # comfortable on a 2 vCPU VM; the httpx pool is sized to match.
-  concurrency: 300
+  # queue, so effective parallelism = min(concurrency, #domains). Keep this
+  # MODEST on small VMs that also run classify -- too high starves classify
+  # of CPU + the SQLite write lock, so downloads pile up and fill the disk.
+  # 40-64 is right for a 2-4 vCPU box; raise only on dedicated download VMs.
+  concurrency: 64
+  # Backlog cap: pause claiming once this many payloads sit in 'downloaded'
+  # waiting for classify. Bounds tmp_downloads so the disk can NEVER fill,
+  # and keeps download from outrunning classify. 0 disables. ~3000 files is
+  # roughly 6-10 GB of buffer.
+  max_downloaded_backlog: 3000
   # Downloads pause when free disk falls below this. 5 suits a laptop
   # (payloads are uploaded to Drive and deleted every batch); raise to
   # 20+ on a production VM with a dedicated disk.

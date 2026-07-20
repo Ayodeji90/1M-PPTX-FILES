@@ -180,6 +180,11 @@ class Registry:
             q += f" LIMIT {int(limit)}"
         return self.conn.execute(q, (status,)).fetchall()
 
+    def count_by_status(self, status: str) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM urls WHERE status=?", (status,)
+        ).fetchone()[0]
+
     def distinct_domains(self, status: str = "discovered") -> list[str]:
         rows = self.conn.execute(
             """SELECT DISTINCT u.domain FROM urls u
