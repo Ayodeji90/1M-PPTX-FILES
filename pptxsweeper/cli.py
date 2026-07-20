@@ -237,12 +237,24 @@ def import_catalog_cmd(path: str) -> None:
 @click.option("--quality-only", is_flag=True,
               help="Keep compliance-flagged (PII/minors/rights) files in review; "
                    "promote only quality-borderline ones.")
+@click.option("--from-drive", is_flag=True,
+              help="Local payloads gone: promote pending review files by server-side "
+                   "moving them from the Drive _review/ folder into the batch (no re-download).")
+@click.option("--limit", type=int, default=None, help="Cap number promoted (testing).")
 @click.option("--dry-run", is_flag=True, help="Report what would be promoted; no changes.")
-def promote_review_cmd(stream: bool, quality_only: bool, dry_run: bool) -> None:
+def promote_review_cmd(stream: bool, quality_only: bool, from_drive: bool,
+                       limit: int | None, dry_run: bool) -> None:
     """Promote manually-approved REVIEW files into the open batch,
-    continuing its numbering and writing sidecars (reuses the local
-    review payloads; no re-download)."""
+    continuing its numbering and writing sidecars. Default reuses the local
+    review payloads; --from-drive moves them from Drive _review/ instead."""
     cfg, reg = _boot("promote_review")
+    if from_drive:
+        from .stages.review_promote import promote_review_from_drive
+        stats = promote_review_from_drive(cfg, reg, _rclone(cfg),
+                                          node=NodeIdentity.from_env(),
+                                          limit=limit, dry_run=dry_run)
+        click.echo(json.dumps(stats, indent=2))
+        return
     from .stages.review_promote import promote_review
     stats = promote_review(reg, only_quality_borderline=quality_only, dry_run=dry_run)
     click.echo(json.dumps(stats, indent=2))

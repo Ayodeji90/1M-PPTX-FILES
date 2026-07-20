@@ -124,3 +124,12 @@ class Rclone:
 
     def delete_file(self, *remote_parts: str) -> None:
         self._run(["deletefile", self.remote_path(*remote_parts)])
+
+    def moveto(self, src_parts: tuple[str, ...], dst_parts: tuple[str, ...],
+               retry: bool = False) -> None:
+        """Server-side move/rename one file within the remote (no download)."""
+        self._run(["moveto", self.remote_path(*src_parts), self.remote_path(*dst_parts)],
+                  retry=retry)
+
+    def exists(self, *remote_parts: str) -> bool:
+        return self.stat_file(*remote_parts) is not None
