@@ -124,7 +124,13 @@ class ClassifyStage:
         self.tmp_dir = cfg.path("paths", "download_tmp_dir")
         self.thresholds = dict(cfg.raw["quality"])
         self.image_thresholds = dict(cfg.raw["quality"]["image_signals"])
-        self.ocr_ambiguous_only = bool(cfg.raw["quality"]["ocr_ambiguous_only"])
+        # Pipeline's OWN OCR (pytesseract) tie-breaker for ambiguous images.
+        # It's a big CPU sink (each ambiguous image spawns tesseract), so it
+        # can be turned off entirely with quality.use_ocr=false -- the engine
+        # degrades gracefully to the other image signals. This is pptxsweeper's
+        # OCR only; it has nothing to do with any external OCR service.
+        use_ocr = bool(cfg.raw["quality"].get("use_ocr", True))
+        self.ocr_ambiguous_only = use_ocr and bool(cfg.raw["quality"]["ocr_ambiguous_only"])
         conv = cfg.raw["conversion"]
         self.soffice_bin = conv["soffice_bin"]
         self.conversion_timeout = int(conv["timeout_s"])

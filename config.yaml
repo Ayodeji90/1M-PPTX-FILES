@@ -133,6 +133,15 @@ common_crawl:
 quality:
   epsilon: 0.03
   min_slides: 5
+  # pptxsweeper's OWN OCR tie-breaker (pytesseract on ambiguous images).
+  # OFF by default: it's the dominant CPU cost in classify -- each ambiguous
+  # image spawns a tesseract process, which starves classify, backs up the
+  # download queue, and fills the disk on small VMs. With it off the quality
+  # engine uses its other image signals (colour/edge/layout) and runs many
+  # times faster. Set true only on a CPU-rich box that needs the extra
+  # accuracy on borderline chart-vs-photo images. (Unrelated to any external
+  # OCR service you may run on the same machine.)
+  use_ocr: false
   ocr_ambiguous_only: true
   use_opencv: false
   high:
