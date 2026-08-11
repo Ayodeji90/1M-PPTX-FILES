@@ -32,7 +32,10 @@ from PIL import Image
 
 log = logging.getLogger("pptxsweeper.quality.images")
 
-Image.MAX_IMAGE_PIXELS = 64_000_000  # decompression-bomb guard
+# Decompression-bomb guard, tuned for small VMs: at 16 MP a decoded RGB
+# frame is ~50 MB transient RAM per image, which is already far beyond what
+# any real presentation raster needs and keeps a 1 GB classify worker safe.
+Image.MAX_IMAGE_PIXELS = 16_000_000
 
 _ANALYSIS_MAX_SIDE = 512  # downscale before analysis; signals are scale-robust
 _MIN_SIDE = 32            # tiny images (icons/bullets) are decorative noise
@@ -60,7 +63,17 @@ def _load_grayscale(data: bytes) -> tuple[np.ndarray, np.ndarray] | None:
     """Return (rgb_small, gray_small) as float arrays, or None if undecodable."""
     try:
         img = Image.open(io.BytesIO(data))
+        # Decode at reduced size when the encoder supports it (JPEG DCT
+        # downscale): avoids ever allocating the full-resolution frame in
+        # RAM for big photos, which is the dominant classify memory spike.
+        try:
+            img.draft("RGB", (_ANALYSIS_MAX_SIDE, _ANALYSIS_MAX_SIDE))
+        except Exception:
+            pass
         img.load()
+    except Image.DecompressionBombError:
+        # Exceeds the pixel cap: treat as undecodable, never OOM a worker.
+        return None
     except Exception:
         return None
     if img.width < _MIN_SIDE or img.height < _MIN_SIDE:

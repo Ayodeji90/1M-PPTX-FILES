@@ -37,10 +37,15 @@ batch:
   size: 25000
   # padding starts at 2 digits, grows to 3 automatically once batch_id > 99
   min_padding: 2
+  # CLIENT CONTRACT: >=70% HIGH, 20-30% MEDIUM, 0% LOW per batch. These are
+  # enforced by both the full-batch selector (compose.select_for_batch) and
+  # the streaming path (ratio-based MEDIUM reservation). The packager also
+  # refuses to run with a degenerate config (high_min_pct < 0.5 or
+  # medium_max_pct > 0.4) and falls back to the contract defaults.
   composition:
-    high_min_pct: 0.0
-    medium_min_pct: 0.0
-    medium_max_pct: 1.0
+    high_min_pct: 0.70
+    medium_min_pct: 0.20
+    medium_max_pct: 0.30
     low_max_pct: 0.0
     # a batch is allowed to open with fewer than batch.size files only
     # when reserve+deliverable HIGH supply is provably insufficient AND
@@ -175,12 +180,17 @@ compliance:
 conversion:
   soffice_bin: soffice
   timeout_s: 120
-  max_concurrent: 4
+  # Global cap on simultaneous LibreOffice conversions. Conversions run in
+  # the CLASSIFY PARENT process (not worker processes), so this is a real
+  # global semaphore. Each soffice needs ~300-500MB RAM: keep it at 1-2 on
+  # small VMs, raise on CPU-rich boxes with many .ppt files to convert.
+  max_concurrent: 2
 
 classify:
   review_dir_cap_gb: 20    # local review/ payloads pruned after Drive sync
   commit_every: 50
-  workers: 0               # 0 = one per CPU core (parallel quality engine)
+  workers: 0               # 0 = one per CPU core, then RAM-capped (see below)
+  worker_memory_mb: 512    # per-worker working-set budget for the RAM cap
   chunk_limit: 150         # files per classify pass, so uploads interleave
   # Auto-promote manually-approved review files into delivery every N
   # hours (0 disables). Promotes BOTH quality-borderline and

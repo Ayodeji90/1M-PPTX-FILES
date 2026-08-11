@@ -1,0 +1,35 @@
+########################################################################
+# VM profile overlay (2 vCPU / 8 GiB -- e.g. Azure Standard_D2ads_v7).
+#
+# Loaded ON TOP of config.yaml via `PPTXSWEEPER_OVERRIDE=config.vm.yaml`
+# in the VM's .env (or the systemd unit). Only the knobs that differ from
+# the laptop defaults are listed -- everything else inherits config.yaml,
+# so this file cannot drift out of sync with the base config.
+#
+# The values below are tuned for 2 vCPU / 8 GiB and are deliberately
+# conservative: the downloader shares the box with classify/package, and
+# a mistake here costs throughput, not data. It also runs safely on a
+# 1 GiB free-tier B1s (classify's RAM cap drops workers to 1 on its own).
+########################################################################
+
+download:
+  # I/O-bound, but classify needs CPU too: 32 workers is plenty on 2 vCPU
+  # (each worker holds one domain at a time, so effective parallelism is
+  # also bounded by the number of live domains).
+  concurrency: 32
+  # Smaller disk buffer on the VM: pause downloads sooner so tmp_downloads
+  # can never fill a 30-64 GB boot disk.
+  max_downloaded_backlog: 1500
+  min_free_disk_gb: 15
+
+classify:
+  workers: 2               # 2 vCPU -> 2 quality-engine workers
+  worker_memory_mb: 512    # per-worker working-set budget for the RAM cap
+  chunk_limit: 100         # smaller passes so uploads interleave nicely
+  review_dir_cap_gb: 40
+
+conversion:
+  # Global LibreOffice cap (conversions run in the classify parent). Each
+  # soffice needs ~0.5-1 GiB transient RAM, so 2 max on an 8 GiB box.
+  max_concurrent: 2
+  timeout_s: 180           # a little more headroom for big legacy .ppt

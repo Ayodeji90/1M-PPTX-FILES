@@ -6,14 +6,24 @@ req/sec per worker, honor 429 with backoff.
 
 `id_` flag on the timestamp URL returns the original bytes without
 Wayback's rewriting -- required for binary payloads.
+
+Memory: `fetch_to_file` STREAMS the archived body straight to disk
+(computing SHA256 on the fly) instead of buffering the whole payload in
+RAM. With up to 300 MB allowed per file and many workers, an in-memory
+`fetch()` (resp.content) could spike multi-GB of RAM; the streaming path
+keeps the downloader's memory flat regardless of file size, so it is the
+only fetch path the pipeline uses.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 import httpx
+
+from ..utils.hashing import StreamingSha256
 
 log = logging.getLogger("pptxsweeper.net.wayback")
 
@@ -59,29 +69,55 @@ class WaybackFetcher:
             return None
         return None
 
-    async def fetch(self, url: str, timestamp: str | None = None
-                    ) -> tuple[bytes | None, str | None, int | None]:
-        """Fetch the archived copy of `url`.
-        Returns (payload_bytes, snapshot_url, http_status). Payload is None
-        when no snapshot exists or fetching failed. A known snapshot
-        `timestamp` (e.g. recorded at CDX-discovery time) skips the flaky
-        availability API."""
+    async def fetch_to_file(self, url: str, dest: Path,
+                            timestamp: str | None = None,
+                            max_bytes: int | None = None,
+                            min_bytes: int = 0,
+                            ) -> tuple[bool, str | None, int, str | None, int | None]:
+        """STREAM the archived copy of `url` to `dest` on disk.
+
+        Returns (ok, sha256, size, snapshot_url, http_status):
+          ok=True           body streamed to `dest`; sha256/size valid.
+          ok=False, size>0  body fetched but rejected by the size gates
+                            (oversize -> dest deleted; undersize -> dest
+                            deleted); caller should mark the URL rejected.
+          ok=False, size=0  no snapshot / fetch failed; caller marks dead.
+        A known snapshot `timestamp` skips the availability API.
+        """
         if not timestamp:
             timestamp = await self.find_snapshot(url)
         if not timestamp:
-            return None, None, None
+            return False, None, 0, None, None
         snapshot_url = f"{self.base}/web/{timestamp}id_/{url}"
         for attempt, backoff in enumerate((0, *self.retry_after_429_s)):
             if backoff:
                 await asyncio.sleep(backoff)
             try:
-                resp = await self._polite_get(snapshot_url)
+                async with self.client.stream("GET", snapshot_url) as resp:
+                    if resp.status_code == 429:
+                        continue
+                    if resp.status_code != 200:
+                        return False, None, 0, snapshot_url, resp.status_code
+                    hasher = StreamingSha256()
+                    size = 0
+                    oversize = False
+                    with open(dest, "wb") as fh:
+                        async for chunk in resp.aiter_bytes(chunk_size=1 << 16):
+                            size += len(chunk)
+                            if max_bytes and size > max_bytes:
+                                oversize = True
+                                break
+                            hasher.update(chunk)
+                            fh.write(chunk)
+                    if oversize:
+                        dest.unlink(missing_ok=True)
+                        return False, None, size, snapshot_url, 200
+                    if size < min_bytes:
+                        dest.unlink(missing_ok=True)
+                        return False, None, size, snapshot_url, 200
+                    return True, hasher.hexdigest(), size, snapshot_url, 200
             except httpx.HTTPError as exc:
-                log.debug("wayback fetch failed for %s: %s", snapshot_url, exc)
-                return None, snapshot_url, None
-            if resp.status_code == 429:
-                continue
-            if resp.status_code == 200:
-                return resp.content, snapshot_url, 200
-            return None, snapshot_url, resp.status_code
-        return None, snapshot_url, 429
+                log.debug("wayback stream failed for %s: %s", snapshot_url, exc)
+                dest.unlink(missing_ok=True)
+                return False, None, 0, snapshot_url, None
+        return False, None, 0, snapshot_url, 429

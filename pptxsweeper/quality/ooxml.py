@@ -49,6 +49,10 @@ _OLE_URI_RE = re.compile(r"/ole(object)?$", re.IGNORECASE)
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".emf", ".wmf", ".webp"}
 
+_CORE_PROP_TAGS = ("title", "creator", "subject", "description", "language",
+                   "created", "modified", "keywords", "lastModifiedBy", "category")
+_APP_PROP_TAGS = ("Company", "Application", "Slides", "Words", "PresentationFormat")
+
 
 class PptxParseError(RuntimeError):
     pass
@@ -127,13 +131,56 @@ def _shape_text(el) -> str:
     return "".join(t.text or "" for t in el.iter(f"{{{NS['a']}}}t"))
 
 
+def extract_doc_properties_from_zip(zf: zipfile.ZipFile) -> dict:
+    """OOXML document properties (docProps/core.xml + app.xml): title,
+    author, organization, dates, language... Client criteria: retain ALL
+    metadata by default -- it cannot be recovered after collection.
+    Runs while the zip is already open (classify does one open per file)."""
+    props: dict = {}
+    names = set(zf.namelist())
+    for part, wanted in (("docProps/core.xml", _CORE_PROP_TAGS),
+                         ("docProps/app.xml", _APP_PROP_TAGS)):
+        if part not in names:
+            continue
+        try:
+            root = _parse_xml(zf.read(part))
+        except PptxParseError:
+            continue
+        for el in root.iter():
+            tag = _localname(el.tag)
+            if tag in wanted and el.text and el.text.strip():
+                props[tag] = el.text.strip()[:500]
+    return props
+
+
+def _notes_text(zf: zipfile.ZipFile, slide_path: str,
+                rels: dict[str, str]) -> str:
+    """Speaker-notes text for a slide part, or '' if it has no notes.
+
+    Notes slides carry much of the PII/context in real decks, so the
+    compliance screens need them -- even though notes never affect the
+    quality verdict or the filler heuristics (they are appended to the
+    screen-only full_text, not to slide text)."""
+    notes_part = next((t for t in rels.values()
+                       if posixpath.basename(t).startswith("notesSlide")
+                       and t.endswith(".xml")), None)
+    if not notes_part or notes_part not in zf.namelist():
+        return ""
+    try:
+        root = _parse_xml(zf.read(notes_part))
+    except PptxParseError:
+        return ""
+    return "\n".join(t.text or "" for t in root.iter(f"{{{NS['a']}}}t"))
+
+
 def extract_slide_features(
     zf: zipfile.ZipFile,
     slide_path: str,
     index: int,
     image_classifier: Callable[[bytes], ImageSignals] | None = None,
-) -> tuple[SlideFeatures, str, list[dict]]:
-    """Parse one slide part. Returns (features, slide_text, image_signal_dicts)."""
+) -> tuple[SlideFeatures, str, list[dict], str]:
+    """Parse one slide part. Returns (features, slide_text,
+    image_signal_dicts, notes_text)."""
     feats = SlideFeatures(index=index)
     root = _parse_xml(zf.read(slide_path))
     rels = _load_rels(zf, slide_path)
@@ -199,10 +246,27 @@ def extract_slide_features(
     feats.text_char_count = len(re.sub(r"\s", "", slide_text))
 
     image_signal_dicts: list[dict] = []
+    # CPU guard: on a slide that already carries a NATIVE analytical object
+    # (chart/diagram/table/embedded spreadsheet) no raster image can change
+    # the verdict -- is_analytical is already True, so photos can't make it
+    # photo-heavy and analytical images can't add a new signal. Skipping the
+    # PIL/numpy classifier here removes the dominant classify cost on
+    # chart-heavy decks. image_count is still recorded so the photo/text
+    # heuristics see that images exist. (chart_as_image decks keep their
+    # images classified: those slides have no native objects.)
+    native_analytical = (feats.native_chart_count + feats.diagram_count
+                         + feats.table_count + feats.ole_spreadsheet_count)
     classifier = image_classifier or (lambda data: classify_image(data))
     for media in candidate_images:
         if media in chart_preview_media:
             continue  # counted as native chart already; skip (bug fix)
+        if native_analytical > 0:
+            feats.image_count += 1
+            image_signal_dicts.append({
+                "media": media, "label": "unclassified",
+                "reason": "native analytical object on slide; image classification skipped",
+            })
+            continue
         try:
             data = zf.read(media)
         except KeyError:
@@ -218,12 +282,16 @@ def extract_slide_features(
             feats.image_photo_count += 1
         # 'ambiguous' counts as neither (never penalized as photo).
 
-    return feats, slide_text, image_signal_dicts
+    return feats, slide_text, image_signal_dicts, _notes_text(zf, slide_path, rels)
 
 
 def parse_pptx(path: str, image_classifier: Callable[[bytes], ImageSignals] | None = None,
-               ) -> tuple[list[SlideFeatures], list[str], list[list[dict]]]:
-    """Full-deck extraction: features, per-slide text, per-slide image signals."""
+               ) -> tuple[list[SlideFeatures], list[str], list[list[dict]],
+                           list[str], dict]:
+    """Full-deck extraction: features, per-slide text, per-slide image
+    signals, per-slide speaker-notes text, and docProps (core+app). All
+    from ONE zip open -- classify combines validation/quality/docProps
+    instead of re-opening the file three times."""
     try:
         zf = zipfile.ZipFile(path)
     except zipfile.BadZipFile as exc:
@@ -232,14 +300,17 @@ def parse_pptx(path: str, image_classifier: Callable[[bytes], ImageSignals] | No
         if "ppt/presentation.xml" not in zf.namelist():
             raise PptxParseError("missing ppt/presentation.xml (not a PPTX)")
         slide_paths = slide_paths_in_order(zf)
-        features, texts, signals = [], [], []
+        features, texts, signals, notes_texts = [], [], [], []
         for i, slide_path in enumerate(slide_paths):
             try:
-                feats, text, sigs = extract_slide_features(zf, slide_path, i, image_classifier)
+                feats, text, sigs, notes = extract_slide_features(
+                    zf, slide_path, i, image_classifier)
             except (KeyError, PptxParseError) as exc:
                 log.warning("slide %s unreadable (%s); recording empty features", slide_path, exc)
-                feats, text, sigs = SlideFeatures(index=i), "", []
+                feats, text, sigs, notes = SlideFeatures(index=i), "", [], ""
             features.append(feats)
             texts.append(text)
             signals.append(sigs)
-    return features, texts, signals
+            notes_texts.append(notes)
+        doc_props = extract_doc_properties_from_zip(zf)
+    return features, texts, signals, notes_texts, doc_props

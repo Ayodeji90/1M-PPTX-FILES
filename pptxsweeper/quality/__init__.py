@@ -42,11 +42,13 @@ def classify(file_path: str | Path, thresholds: dict | None = None,
     try:
         if suffix == ".pptx":
             from .ooxml import parse_pptx
-            features, texts, image_signals = parse_pptx(str(path), _image_classifier)
+            features, texts, image_signals, notes_texts, doc_props = \
+                parse_pptx(str(path), _image_classifier)
             fmt = "pptx"
         elif suffix == ".pdf":
             from .pdf import parse_pdf
-            features, texts, image_signals = parse_pdf(str(path), _image_classifier)
+            features, texts, image_signals, notes_texts, doc_props = \
+                parse_pdf(str(path), _image_classifier)
             fmt = "pdf"
         else:
             report = QualityReport(error=f"unsupported extension {suffix}")
@@ -59,7 +61,13 @@ def classify(file_path: str | Path, thresholds: dict | None = None,
 
     mark_fillers(features, texts)
     report = decide_from_features(features, thresholds, fmt=fmt)
+    report.doc_properties = doc_props
+    # Compliance text = slide text + speaker notes (notes carry PII/context
+    # in real decks and must be screened); notes are NOT added to slide
+    # text so the filler/quality heuristics stay body-text-only.
     report.full_text = "\n".join(texts)
+    if notes_texts:
+        report.full_text += "\n\n" + "\n".join(n for n in notes_texts if n)
 
     # Attach image signal details to explanations for the audit record.
     analytical_imgs = sum(
@@ -68,10 +76,14 @@ def classify(file_path: str | Path, thresholds: dict | None = None,
     ambiguous_imgs = sum(
         1 for slide_sigs in image_signals for s in slide_sigs if s.get("label") == "ambiguous"
     )
-    if analytical_imgs or ambiguous_imgs:
+    skipped_imgs = sum(
+        1 for slide_sigs in image_signals for s in slide_sigs if s.get("label") == "unclassified"
+    )
+    if analytical_imgs or ambiguous_imgs or skipped_imgs:
         report.explanations.append(
             f"raster images: {analytical_imgs} classified analytical (chart-as-image), "
-            f"{ambiguous_imgs} ambiguous (not counted as photos)"
+            f"{ambiguous_imgs} ambiguous (not counted as photos), "
+            f"{skipped_imgs} skipped (native analytical object already on slide)"
         )
     return report
 

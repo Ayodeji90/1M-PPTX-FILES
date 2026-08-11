@@ -35,8 +35,38 @@ class Selection:
     def composition_ok(self, high_min_pct: float, medium_max_pct: float) -> bool:
         if self.count == 0:
             return False
+        high_min_pct, medium_max_pct = _safe_composition(high_min_pct, medium_max_pct)
         return (len(self.high) / self.count >= high_min_pct
                 and len(self.medium) / self.count <= medium_max_pct)
+
+
+def resolve_composition(comp: dict) -> tuple[float, float, float]:
+    """Read the raw `batch.composition` config dict and return
+    (high_min_pct, medium_min_pct, medium_max_pct).
+
+    Enforces the client contract (>=70% HIGH, 20-30% MEDIUM, 0% LOW): a
+    config that would deliver WEAKER batches than the contract -- any
+    high_min_pct below 0.70 or medium_max_pct above 0.30 -- is clamped
+    back to the contract values with a loud warning, instead of silently
+    shipping non-compliant batches. Stricter-than-contract values (e.g.
+    high_min 0.80 or medium_max 0.25) pass through.
+    """
+    high_min = float(comp.get("high_min_pct", 0.70))
+    med_max = float(comp.get("medium_max_pct", 0.30))
+    clamped = False
+    if high_min < 0.70:
+        high_min = 0.70
+        clamped = True
+    if med_max > 0.30:
+        med_max = 0.30
+        clamped = True
+    if clamped:
+        log.warning(
+            "composition config would deliver batches weaker than the client "
+            "contract (high_min_pct=%s, medium_max_pct=%s); clamped to "
+            "0.70/0.30. Fix batch.composition in config.yaml.",
+            comp.get("high_min_pct"), comp.get("medium_max_pct"))
+    return high_min, float(comp.get("medium_min_pct", 0.20)), med_max
 
 
 def deliverable_candidates(reg: Registry, batch_id: int | None = None) -> list[sqlite3.Row]:
@@ -57,6 +87,16 @@ def deliverable_candidates(reg: Registry, batch_id: int | None = None) -> list[s
     return reg.conn.execute(q.format(batch_clause="")).fetchall()
 
 
+def _safe_composition(high_min_pct: float, medium_max_pct: float) -> tuple[float, float]:
+    """Clamp degenerate composition values so the ratio math never divides
+    by zero and caps stay sane. A high_min_pct of 0.0 (e.g. a hand-edited
+    config) means 'no HIGH floor' -- the MEDIUM cap then collapses to the
+    absolute batch cap, which is the sensible reading."""
+    high_min_pct = float(high_min_pct or 0.0)
+    medium_max_pct = max(0.0, min(1.0, float(medium_max_pct or 0.0)))
+    return max(high_min_pct, 1e-9), medium_max_pct
+
+
 def select_for_batch(candidates: list[sqlite3.Row], batch_size: int,
                      high_min_pct: float = 0.70, medium_max_pct: float = 0.30,
                      ) -> Selection:
@@ -66,6 +106,7 @@ def select_for_batch(candidates: list[sqlite3.Row], batch_size: int,
     first unconditionally -- their names are already allocated and a
     finalized batch must have no gaps.
     """
+    high_min_pct, medium_max_pct = _safe_composition(high_min_pct, medium_max_pct)
     assigned = [c for c in candidates if c["delivered_filename"]]
     fresh = [c for c in candidates if not c["delivered_filename"]]
 

@@ -454,19 +454,34 @@ class DownloadStage:
                     known_ts = json.loads(meta_raw).get("wayback_timestamp")
                 except ValueError:
                     pass
-            payload, snapshot_url, wb_status = await self.wayback.fetch(url, timestamp=known_ts)
-            if payload:
-                part_path = self._part_path(url_id)
-                hasher = StreamingSha256()
-                hasher.update(payload)
-                part_path.write_bytes(payload)
+            # STREAM to disk (never buffer a multi-hundred-MB archive in
+            # RAM), enforcing the same min/max size gates as origin GETs.
+            part_path = self._part_path(url_id)
+            ok, sha256, size, snapshot_url, wb_status = await self.wayback.fetch_to_file(
+                url, part_path, timestamp=known_ts,
+                max_bytes=self.max_bytes, min_bytes=self.min_bytes)
+            if ok:
                 self.stats["wayback"] += 1
                 await self._finalize_payload(
-                    row, part_path, hasher.hexdigest(), len(payload),
+                    row, part_path, sha256, size,
                     origin_status or wb_status or 0, robots or "unavailable",
                     retrieval="wayback", snapshot_url=snapshot_url,
                 )
                 return
+            part_path.unlink(missing_ok=True)
+            if size >= self.max_bytes:
+                self.writer.update_url(url_id, status="rejected", http_status=wb_status,
+                                       robots_status=robots,
+                                       reject_reason="wayback_oversize_body")
+                self.stats["rejected"] += 1
+                return
+            if 0 < size < self.min_bytes:
+                self.writer.update_url(url_id, status="rejected", http_status=wb_status,
+                                       robots_status=robots,
+                                       reject_reason="wayback_undersize_body")
+                self.stats["rejected"] += 1
+                return
+            # no snapshot / fetch failed: terminal dead
         self.writer.update_url(url_id, status="dead", http_status=origin_status,
                                robots_status=robots, reject_reason=reason)
         self.stats["dead"] += 1

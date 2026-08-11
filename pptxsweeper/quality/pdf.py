@@ -101,7 +101,12 @@ def extract_page_features(
 
 
 def parse_pdf(path: str, image_classifier: Callable[[bytes], ImageSignals] | None = None,
-              ) -> tuple[list[SlideFeatures], list[str], list[list[dict]]]:
+              ) -> tuple[list[SlideFeatures], list[str], list[list[dict]],
+                          list[str], dict]:
+    """PDF feature extraction via PyMuPDF (fitz). Returns the same shape as
+    ooxml.parse_pptx: (features, page_texts, image_signals, notes_texts,
+    doc_properties) -- PDFs have no speaker notes (empty list) and
+    doc_properties come from the document metadata."""
     try:
         import fitz  # PyMuPDF
     except ImportError as exc:  # pragma: no cover
@@ -113,9 +118,15 @@ def parse_pdf(path: str, image_classifier: Callable[[bytes], ImageSignals] | Non
         raise PdfParseError(f"cannot open PDF: {exc}") from exc
 
     features, texts, signals = [], [], []
+    doc_props: dict = {}
     with doc:
         if doc.needs_pass:
             raise PdfParseError("password-protected PDF")
+        md = doc.metadata or {}
+        for src, tag in (("title", "title"), ("author", "creator"),
+                         ("subject", "subject"), ("keywords", "keywords")):
+            if md.get(src):
+                doc_props[tag] = str(md[src]).strip()[:500]
         for i, page in enumerate(doc):
             try:
                 feats, text, sigs = extract_page_features(page, i, image_classifier)
@@ -125,4 +136,4 @@ def parse_pdf(path: str, image_classifier: Callable[[bytes], ImageSignals] | Non
             features.append(feats)
             texts.append(text)
             signals.append(sigs)
-    return features, texts, signals
+    return features, texts, signals, [], doc_props

@@ -78,6 +78,7 @@ class QualityReport:
     borderline: bool = False
     explanations: list[str] = field(default_factory=list)
     error: str = ""
+    doc_properties: dict = field(default_factory=dict)  # docProps core+app (metadata retention)
     full_text: str = ""   # extracted text for compliance screens; not persisted
 
     def to_dict(self) -> dict:

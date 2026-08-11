@@ -29,7 +29,8 @@ from ..db.dao import Registry, utcnow
 from ..naming import BatchAllocator, manifest_filename
 from ..node import NodeIdentity
 from ..utils.hashing import sha256_file
-from .compose import deliverable_candidates, select_for_batch, Selection
+from .compose import (deliverable_candidates, resolve_composition,
+                       select_for_batch, Selection)
 from .manifest import manifest_row, metadata_record, write_manifest
 from .rclone import Rclone
 
@@ -56,8 +57,11 @@ class PackageStage:
         self.verify_method = rc["verify_method"]
         self.batch_size = int(cfg.raw["batch"]["size"])
         comp = cfg.raw["batch"]["composition"]
-        self.high_min_pct = float(comp["high_min_pct"])
-        self.medium_max_pct = float(comp["medium_max_pct"])
+        # Enforces the client contract; refuses degenerate configs (a
+        # high_min_pct of 0.0 would both crash the selector and silently
+        # disable composition). See compose.resolve_composition.
+        (self.high_min_pct, self.medium_min_pct, self.medium_max_pct) = \
+            resolve_composition(comp)
         self.max_open_days = float(comp["max_batch_open_days"])
         self.daily_budget = int(float(cfg.raw["upload"]["daily_byte_budget_gb"]) * 1024 ** 3)
         self.build_dir = cfg.path("paths", "batch_build_dir")
@@ -291,7 +295,6 @@ class PackageStage:
         while True:
             batch = dict(self.allocator.open_batch())
             counts = self._batch_counts(batch["batch_id"])
-            medium_cap = math.floor(self.batch_size * self.medium_max_pct)
             capacity = self.batch_size - counts["total"]
             candidates = deliverable_candidates(self.reg, batch_id=batch["batch_id"])
 
@@ -300,6 +303,7 @@ class PackageStage:
             folder = batch["folder_name"]
             local_batch = self.build_dir / folder
             local_batch.mkdir(parents=True, exist_ok=True)
+            high_in_batch = counts["high"]
             medium_in_batch = counts["medium"]
 
             for row in candidates:
@@ -308,8 +312,13 @@ class PackageStage:
                 if max_files and stats["uploaded"] + len(prepared) >= max_files:
                     break
                 r = dict(row)
+                # Composition gate (client contract): MEDIUM may never push
+                # the batch below HIGH >= high_min_pct -- MEDIUM <= high *
+                # medium_max_pct/high_min_pct. Surplus MEDIUM is parked in
+                # 'reserve' until enough HIGH arrives. (Absolute batch-cap
+                # bound included via _medium_allowed.)
                 if (r["quality"] == "MEDIUM" and not r["delivered_filename"]
-                        and medium_in_batch >= medium_cap):
+                        and medium_in_batch >= self._medium_allowed(high_in_batch)):
                     if r["url_status"] != "reserve" and r["url_id"]:
                         self.reg.update_url(r["url_id"], status="reserve")
                         stats["reserved"] += 1
@@ -339,13 +348,32 @@ class PackageStage:
                         shutil.copy2(payload, dst)
                 self._write_metadata_sidecar(local_batch, r)
                 budget_left -= size
-                if r["quality"] == "MEDIUM":
+                if r["quality"] == "HIGH":
+                    high_in_batch += 1
+                elif r["quality"] == "MEDIUM":
                     medium_in_batch += 1
                 r["_payload"] = payload
                 r["_size"] = payload.stat().st_size
                 prepared.append(r)
 
             if not prepared:
+                # Supply exhausted (or everything left is MEDIUM held in
+                # reserve). Close a short batch once it has sat open past
+                # max_batch_open_days instead of leaving it open forever;
+                # an empty batch is abandoned (its reserved MEDIUM rolls
+                # into the next batch).
+                if self._open_batch_expired(batch):
+                    if counts["total"] > 0:
+                        log.warning("open batch %s exceeded max_batch_open_days=%s "
+                                    "with %d files; closing short", folder,
+                                    self.max_open_days, counts["total"])
+                        self._finalize_streamed(batch, counts)
+                        stats["batches_finalized"] += 1
+                    else:
+                        self.allocator.set_state(batch["batch_id"], "abandoned")
+                        log.warning("open batch %s exceeded max_batch_open_days=%s "
+                                    "with no files; abandoning", folder,
+                                    self.max_open_days)
                 break
 
             # one parallel transfer for the whole set, one listing to verify
@@ -402,6 +430,23 @@ class PackageStage:
         if any(stats[k] for k in ("uploaded", "reserved", "requeued", "batches_finalized")):
             log.info("stream upload: %s", stats)
         return stats
+
+    def _medium_allowed(self, high_in_batch: int) -> int:
+        """Max MEDIUM count that keeps HIGH >= high_min_pct of the batch
+        (contract): MEDIUM <= high * medium_max_pct / high_min_pct, also
+        bounded by the absolute batch cap."""
+        if high_in_batch <= 0:
+            return 0
+        return min(math.floor(self.batch_size * self.medium_max_pct),
+                   math.floor(high_in_batch * self.medium_max_pct / self.high_min_pct))
+
+    def _open_batch_expired(self, batch: dict) -> bool:
+        try:
+            created = datetime.fromisoformat(batch["created_at"].replace("Z", "+00:00"))
+        except (ValueError, KeyError, AttributeError):
+            return False
+        return (datetime.now(timezone.utc) - created).total_seconds() / 86400 \
+            >= self.max_open_days
 
     def _batch_counts(self, batch_id: int) -> dict:
         row = self.reg.conn.execute(

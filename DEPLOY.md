@@ -91,19 +91,71 @@ You can also run it by hand:
 ./.venv/bin/pptxsweeper import-urls
 ```
 
-## 3. GCP VM sizing
+## 3. VM sizing (GCP or Azure free-tier / credit)
 
-`e2-standard-2` (2 vCPU / 8 GB), Ubuntu 22.04/24.04, 50–100 GB disk. The
-downloader is I/O-bound at `concurrency: 300`; payloads are uploaded to
-Drive and deleted per batch, so disk stays small.
+Minimum workable: **1 vCPU / 1 GB** (Azure free-tier `B1s`, 750 h/month,
+$0) — the pipeline is RAM-aware: classify caps its worker processes to
+what the box can hold, conversions are serialized, and downloads pause on
+disk pressure.
 
-## 4. Watch it
+Comfortable (recommended if you have free credit): **2 vCPU / 8 GB**
+(e.g. Azure `Standard_D2ads_v7` — ~$83/month, so a ~$200 first-timer
+credit covers ~2.4 months; `B2s` 2 vCPU/4 GB at ~$39/month stretches it
+twice as far). Ubuntu 22.04/24.04, **64 GB disk** (downloads buffer on
+local disk before upload; the free-space guard pauses rather than crashes,
+but headroom avoids stalls). Everything is resumable, so you can downsize
+or move VMs anytime without losing progress.
+
+On the VM, run the tuned profile instead of the laptop defaults:
+
+```bash
+# in .env on the VM only:
+PPTXSWEEPER_OVERRIDE=config.vm.yaml
+```
+
+That deep-merges `config.vm.yaml` (32 download workers, 2 classify
+workers, 2 LibreOffice conversions, tighter disk/backlog caps) over
+`config.yaml`. The laptop keeps the defaults — same repo, no drift.
+
+## 4. Run it 24/7 with systemd (no SSH session needed)
+
+Better than tmux for a headless VM: the service restarts itself on
+crashes/reboots and starts at boot.
+
+```bash
+sudo cp deploy/pptxsweeper.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pptxsweeper
+
+systemctl status pptxsweeper
+journalctl -u pptxsweeper -f          # live logs
+```
+
+Optional safety valve for small VMs (1 GiB B1s especially):
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile \
+  && sudo mkswap /swapfile && sudo swapon /swapfile
+# add to /etc/fstab:  /swapfile none swap sw 0 0
+```
+
+## 5. Watch it
 
 ```bash
 ./.venv/bin/pptxsweeper status         # counts, ETA, per-tier acceptance
-tmux attach -t sweeper                  # live progress line
+tmux attach -t sweeper                  # live progress line (if using tmux)
 ```
 
 Google's upload cap is 750 GB/account/day — shared across all machines
 since they use one account. The packager self-throttles under
 `upload.daily_byte_budget_gb` (700).
+
+### Cost note (Azure free credit)
+
+- The **750 h/month `B1s` free tier** is $0 for 12 months but slow (1 vCPU,
+  1 GiB — expect single-digit files/minute on big decks).
+- The **first-timer credit** is better spent on a `B2s`/`D2ads_v7` and
+  runs the full pipeline at laptop-class speed. Track spending in the
+  Azure portal and set a budget alert so the credit isn't silently
+  exceeded — the pipeline is resumable, so you can downsize or pause it
+  when the credit runs out.

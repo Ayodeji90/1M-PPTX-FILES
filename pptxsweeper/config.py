@@ -54,18 +54,44 @@ class Config:
     # Construction
     # ------------------------------------------------------------------
     @classmethod
-    def load(cls, start: Path | None = None, config_filename: str = "config.yaml") -> "Config":
+    def load(cls, start: Path | None = None,
+             config_filename: str | None = None) -> "Config":
+        """Load configuration.
+
+        - The base config filename defaults to config.yaml and can be
+          overridden with PPTXSWEEPER_CONFIG.
+        - An optional deep-merge overlay (PPTXSWEEPER_OVERRIDE, e.g.
+          config.vm.yaml on an Azure VM) is applied ON TOP of the base, so
+          a VM profile only lists the knobs that differ from the laptop
+          defaults and cannot drift out of sync with config.yaml.
+        """
+        if config_filename is None:
+            config_filename = os.environ.get("PPTXSWEEPER_CONFIG", "config.yaml")
         start = start or Path.cwd()
         root = _find_project_root(start, config_filename)
-        config_path = root / config_filename
-        with open(config_path, "r", encoding="utf-8") as fh:
-            raw = yaml.safe_load(fh) or {}
 
+        # .env is loaded BEFORE resolving the override vars so they can be
+        # set there (the documented per-machine mechanism) as well as in
+        # the shell / systemd unit. load_dotenv(override=False) keeps real
+        # shell/systemd vars authoritative over .env.
         env_path = root / ".env"
         if env_path.exists():
             load_dotenv(env_path, override=False)
         else:
             env_path = None
+
+        with open(root / config_filename, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+
+        override_name = os.environ.get("PPTXSWEEPER_OVERRIDE")
+        if override_name:
+            override_path = root / override_name
+            if not override_path.exists():
+                raise ConfigError(
+                    f"PPTXSWEEPER_OVERRIDE={override_name!r} not found under {root}")
+            with open(override_path, "r", encoding="utf-8") as fh:
+                overlay = yaml.safe_load(fh) or {}
+            _deep_merge(raw, overlay)
 
         return cls(raw, root, env_path)
 
@@ -128,6 +154,17 @@ class Config:
         lets each VM deliver into its own folder on the SAME account (falls
         back to rclone.root_folder in config.yaml)."""
         return os.environ.get("RCLONE_ROOT_FOLDER", self.raw["rclone"]["root_folder"])
+
+
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively overlay `overlay` onto `base` in place (dicts merge,
+    scalars/lists replace). Enables small per-machine config deltas."""
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
 
 
 def _find_project_root(start: Path, config_filename: str) -> Path:

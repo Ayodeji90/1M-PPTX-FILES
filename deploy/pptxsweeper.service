@@ -1,0 +1,50 @@
+# PptxSweeper systemd service for a 24/7 headless VM (Azure free-tier /
+# credit VM, or any always-on box). Keeps the pipeline running across
+# reboots and crashes with no SSH session needed.
+#
+# Install:
+#   sudo cp deploy/pptxsweeper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pptxsweeper
+#
+# Watch it:
+#   systemctl status pptxsweeper
+#   journalctl -u pptxsweeper -f          # live logs
+#   journalctl -u pptxsweeper -n 200      # recent logs
+#
+# Notes:
+#   - Adjust User= / WorkingDirectory= to your VM user and repo path.
+#   - PPTXSWEEPER_OVERRIDE points at the VM tuning profile (config.vm.yaml).
+#   - .env must exist in WorkingDirectory (CONTACT_EMAIL, NODE_ID, ...).
+#   - First-time rclone auth still needs one manual step (see DEPLOY.md:
+#     `rclone config` with a laptop-generated token) -- run it once before
+#     enabling the service, or the service will crash-loop until fixed.
+
+[Unit]
+Description=PptxSweeper million-scale .ppt/.pptx acquisition pipeline
+Documentation=https://github.com/Ayodeji90/1M-PPTX-FILES
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/pptxsweeper
+Environment=PPTXSWEEPER_OVERRIDE=config.vm.yaml
+EnvironmentFile=/home/azureuser/pptxsweeper/.env
+ExecStart=/home/azureuser/pptxsweeper/.venv/bin/pptxsweeper run
+Restart=always
+RestartSec=30
+# SIGTERM lets the pipeline finish in-flight work gracefully (download
+# grace window + subprocess shutdown), so no row is ever lost.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+# One pipeline per machine by design (sqlite single-writer).
+# Many concurrent sockets for the async downloader.
+LimitNOFILE=65536
+# WAL sqlite + a few subprocesses; raise the soft limit slightly.
+LimitNPROC=1024
+
+[Install]
+WantedBy=multi-user.target

@@ -29,58 +29,47 @@ from ..quality import classify as quality_classify
 
 log = logging.getLogger("pptxsweeper.classify")
 
-_CORE_PROP_TAGS = ("title", "creator", "subject", "description", "language",
-                   "created", "modified", "keywords", "lastModifiedBy", "category")
-_APP_PROP_TAGS = ("Company", "Application", "Slides", "Words", "PresentationFormat")
 
-
-def extract_doc_properties(path: Path) -> dict:
-    """OOXML document properties (docProps/core.xml + app.xml): title,
-    author, organization, dates, language... Client criteria: retain all
-    metadata by default -- it cannot be recovered after collection."""
-    import zipfile
+def _ram_available_mb() -> int | None:
+    """Available RAM in MiB via /proc/meminfo (Linux); None elsewhere.
+    Used to cap the worker-process pool so a small VM never OOMs."""
     try:
-        from lxml import etree
-    except ImportError:  # pragma: no cover
-        import xml.etree.ElementTree as etree  # type: ignore
-    props: dict = {}
-    try:
-        with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
-            for part, wanted in (("docProps/core.xml", _CORE_PROP_TAGS),
-                                 ("docProps/app.xml", _APP_PROP_TAGS)):
-                if part not in names:
-                    continue
-                root = etree.fromstring(zf.read(part))
-                for el in root.iter():
-                    tag = el.tag.rsplit("}", 1)[-1]
-                    if tag in wanted and el.text and el.text.strip():
-                        props[tag] = el.text.strip()[:500]
-    except Exception:
-        pass
-    return props
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError):
+        return None
+    return None
 
 
 def _compute_task(task: dict) -> dict:
-    """Pure per-file compute (validation, conversion, quality engine,
-    screens) -- runs in a worker PROCESS; no registry access, plain
-    dicts in and out so it pickles cleanly."""
+    """Pure per-file compute (validation, quality engine, screens) -- runs
+    in a worker PROCESS; no registry access, plain dicts in and out so it
+    pickles cleanly. Legacy .ppt conversion runs in the PARENT process
+    (bounded by conversion.max_concurrent) so worker processes never spawn
+    LibreOffice; `preconverted` tasks are validated as converted .pptx."""
     from ..download.validate import validate_payload
-    from ..convert import convert_ppt_to_pptx
     from ..quality import classify as quality_classify
     from ..compliance.screens import run_screens
 
     payload = Path(task["payload"])
+    preconverted = bool(task.get("preconverted"))
     out: dict = {"url_id": task["url_id"], "payload": str(payload),
-                 "converted": 0, "reject": None, "format": None, "slide_count": 0}
+                 "converted": 1 if preconverted else 0,
+                 "reject": None, "format": None, "slide_count": 0}
     v = validate_payload(payload)
     if not v.ok:
-        out["reject"] = f"validation:{v.reason}"
+        prefix = "converted_pptx_invalid" if preconverted else "validation"
+        out["reject"] = f"{prefix}:{v.reason}"
         return out
     if v.format not in task["allowed_formats"]:
         out["reject"] = f"format_not_allowed:{v.format}"
         return out
+    # Native .ppt normally never reaches here (converted in the parent);
+    # keep a worker-side fallback for direct API use.
     if v.format == "ppt":
+        from ..convert import convert_ppt_to_pptx
         res = convert_ppt_to_pptx(payload, Path(task["tmp_dir"]),
                                   soffice_bin=task["soffice_bin"],
                                   timeout_s=task["conv_timeout"])
@@ -99,8 +88,7 @@ def _compute_task(task: dict) -> dict:
     report = quality_classify(payload, thresholds=task["thresholds"],
                               image_thresholds=task["image_thresholds"],
                               ocr_ambiguous_only=task["ocr"])
-    qrd = report.to_dict()
-    qrd["doc_properties"] = extract_doc_properties(payload)
+    qrd = report.to_dict()   # carries doc_properties (extracted in one zip open)
     screens = run_screens(report.full_text, robots_status=task["robots_status"])
     out.update(
         quality=report.quality, decision=report.decision,
@@ -142,11 +130,11 @@ class ClassifyStage:
         quality/screens) fans out to one worker process per CPU core;
         this process does all registry writes and file moves."""
         import os as _os
-        from concurrent.futures import ProcessPoolExecutor
+        from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self.review_dir.mkdir(parents=True, exist_ok=True)
         if limit is None:
-            limit = int(self.cfg.raw.get("classify", {}).get("chunk_limit", 400)) or None
+            limit = int(self.cfg.raw.get("classify", {}).get("chunk_limit", 150)) or None
         rows = self.reg.urls_by_status("downloaded", limit=limit)
         log.info("classifying %d downloaded files%s", len(rows),
                  " [DRY RUN]" if self.dry_run else "")
@@ -184,19 +172,103 @@ class ClassifyStage:
         if not pairs:
             return self.stats
 
+        # RAM-aware worker cap: each worker holds numpy/PIL/lxml + one
+        # deck's images; never spawn more workers than available RAM allows
+        # (config classify.worker_memory_mb sets the per-worker budget).
         workers = int(self.cfg.raw.get("classify", {}).get("workers", 0)) or _os.cpu_count() or 2
+        mem_budget_mb = int(self.cfg.raw.get("classify", {}).get("worker_memory_mb", 512))
+        avail_mb = _ram_available_mb()
+        if avail_mb is not None:
+            workers = min(workers, max(1, avail_mb // mem_budget_mb))
         workers = min(workers, len(pairs))
+
+        # Legacy .ppt files convert in THIS process through one bounded
+        # conversion queue (conversion.max_concurrent): LibreOffice RAM
+        # usage stays predictable on small VMs and worker processes never
+        # spawn soffice. Conversions OVERLAP with quality-classification:
+        # native pptx tasks go to the worker pool immediately, and each
+        # converted file joins the pool the moment its conversion finishes.
+        from ..download.validate import sniff_format
+        conv_max = max(1, int(self.cfg.raw.get("conversion", {})
+                              .get("max_concurrent", 2)))
+        conv_pairs, native_pairs = [], []
+        for pair in pairs:
+            payload = Path(pair[1]["payload"])
+            if payload.suffix.lower() == ".ppt" or sniff_format(payload) == "ole2":
+                conv_pairs.append(pair)
+            else:
+                native_pairs.append(pair)
+
         if workers <= 1:
-            results = map(_compute_task, (t for _, t in pairs))
-            for (row, _), result in zip(pairs, results):
+            # single process: bounded conversions first, then sequential
+            # classify (converted results are plain dicts, no pool needed)
+            converted: list[tuple[dict, dict]] = []
+            if conv_pairs:
+                with ThreadPoolExecutor(max_workers=conv_max) as cpool:
+                    for (row, task), result in zip(
+                            conv_pairs,
+                            cpool.map(self._parent_convert, (t for _, t in conv_pairs))):
+                        if result.get("reject"):
+                            self._persist_safe(row, result)
+                        else:
+                            converted.append((row, result))
+            ordered = native_pairs + converted
+            for (row, _), result in zip(ordered,
+                                        map(_compute_task, (t for _, t in ordered))):
                 self._persist_safe(row, result)
         else:
-            with ProcessPoolExecutor(max_workers=workers) as pool:
-                for (row, _), result in zip(pairs, pool.map(
-                        _compute_task, (t for _, t in pairs), chunksize=4)):
-                    self._persist_safe(row, result)
+            from concurrent.futures import FIRST_COMPLETED, wait
+            with ProcessPoolExecutor(max_workers=workers) as pool, \
+                    ThreadPoolExecutor(max_workers=conv_max) as cpool:
+                pending: dict = {}        # classify future -> row
+                conversions: dict = {}    # convert future -> (row, task)
+                for row, task in native_pairs:
+                    pending[pool.submit(_compute_task, task)] = row
+                for row, task in conv_pairs:
+                    conversions[cpool.submit(self._parent_convert, task)] = (row, task)
+                while pending or conversions:
+                    done, _ = wait([*pending.keys(), *conversions.keys()],
+                                   return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        if fut in conversions:
+                            row, _task = conversions.pop(fut)
+                            result = fut.result()
+                            if result.get("reject"):
+                                self._persist_safe(row, result)
+                            else:
+                                # converted file joins the pool right away
+                                pending[pool.submit(_compute_task, result)] = row
+                        else:
+                            row = pending.pop(fut)
+                            self._persist_safe(row, fut.result())
         log.info("classify done (%d workers): %s", workers, self.stats)
         return self.stats
+
+    def _parent_convert(self, task: dict) -> dict:
+        """Convert a legacy .ppt in this (parent) process. Runs inside the
+        bounded conversion thread pool; the converted .pptx is handed back
+        as a preconverted task (ALL original task fields preserved -- the
+        worker needs thresholds/allowed_formats/etc.), or a reject dict on
+        failure (the original .ppt payload is deleted by the caller's
+        _persist)."""
+        from ..convert import convert_ppt_to_pptx
+        payload = Path(task["payload"])
+        out = dict(task)   # keep every field the worker will need
+        out.update({"converted": 1, "preconverted": 1, "reject": None,
+                    "format": None, "slide_count": 0})
+        try:
+            res = convert_ppt_to_pptx(payload, Path(task["tmp_dir"]),
+                                      soffice_bin=task["soffice_bin"],
+                                      timeout_s=task["conv_timeout"])
+        except Exception as exc:
+            out["reject"] = f"ppt_conversion_failed:{exc}"
+            return out
+        if not res.ok:
+            out["reject"] = f"ppt_conversion_failed:{res.reason}"
+            return out
+        payload.unlink(missing_ok=True)
+        out["payload"] = str(res.output_path)
+        return out
 
     def _persist_safe(self, row: dict, result: dict) -> None:
         try:
@@ -369,8 +441,25 @@ def run_reclassify(cfg: Config, reg: Registry) -> dict:
         stats["rechecked"] += 1
         if report.quality != row["quality"] or report.decision != row["decision"]:
             stats["changed"] += 1
+            new_report = report.to_dict()
+            # a fresh decide() report has no docProps; carry the retained
+            # metadata (and image-signal audit lines) from the stored record
+            # so a threshold re-run never wipes the audit trail
+            try:
+                stored = json.loads(row["quality_report"]) if row["quality_report"] else {}
+            except ValueError:
+                stored = {}
+            new_report["doc_properties"] = stored.get("doc_properties") or {}
+            # keep only the image-audit line from the old report: a fresh
+            # decide() can never reproduce it, and appending the stale
+            # decision lines would leave contradictory verdict text
+            new_report["explanations"] = [
+                *new_report.get("explanations", []),
+                *(e for e in (stored.get("explanations") or [])
+                  if "raster images" in e),
+            ]
             reg.update_file(row["id"], quality=report.quality, decision=report.decision,
-                            quality_report=report.to_dict())
+                            quality_report=new_report)
             # keep urls.status in sync for un-delivered files
             url_status = {"DELIVER": "classified", "REVIEW": "review",
                           "REJECT": "rejected"}[report.decision]
