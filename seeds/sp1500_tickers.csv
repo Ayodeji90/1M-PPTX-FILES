@@ -68,3 +68,179 @@ CW,Curtiss-Wright,curtisswright.com
 BRC,Brady Corporation,bradycorp.com
 ESE,ESCO Technologies,escotechnologies.com
 SXI,Standex International,standex.com
+
+# --- Expansion 2026-08-11: major S&P 500 / large-cap names (curated) ---
+TSLA,Tesla Inc.,tesla.com
+NFLX,Netflix Inc.,netflix.com
+ADBE,Adobe Inc.,adobe.com
+AMD,Advanced Micro Devices,amd.com
+QCOM,Qualcomm Inc.,qualcomm.com
+TXN,Texas Instruments,ti.com
+MU,Micron Technology,micron.com
+AVGO,Broadcom Inc.,broadcom.com
+INTU,Intuit Inc.,intuit.com
+NOW,Servicenow Inc.,servicenow.com
+SNOW,Snowflake Inc.,snowflake.com
+PLTR,Palantir Technologies,palantir.com
+UBER,Uber Technologies,uber.com
+ABNB,Airbnb Inc.,airbnb.com
+SHOP,Shopify Inc.,shopify.com
+PYPL,PayPal Holdings,paypal.com
+SBUX,Starbucks Corp.,starbucks.com
+YUM,Yum! Brands,yum.com
+DAL,Delta Air Lines,delta.com
+UAL,United Airlines,united.com
+AAL,American Airlines,aa.com
+LUV,Southwest Airlines,southwest.com
+NEE,NextEra Energy,nexteraenergy.com
+DUK,Duke Energy,duke-energy.com
+SO,Southern Company,southerncompany.com
+EXC,Exelon Corp,exeloncorp.com
+AEP,American Electric Power,aep.com
+SLB,Schlumberger,slb.com
+HAL,Halliburton,halliburton.com
+BKR,Baker Hughes,bakerhughes.com
+COP,ConocoPhillips,conocophillips.com
+PSX,Phillips 66,phillips66.com
+MPC,Marathon Petroleum,marathonpetroleum.com
+VLO,Valero Energy,valero.com
+OXY,Occidental Petroleum,oxy.com
+DVN,Devon Energy,devonenergy.com
+EOG,EOG Resources,eogresources.com
+CMI,Cummins Inc.,cummins.com
+ETN,Eaton Corp,eaton.com
+EMR,Emerson Electric,emerson.com
+PH,Parker Hannifin,parker.com
+ROK,Rockwell Automation,rockwellautomation.com
+OTIS,Otis Worldwide,otis.com
+CARR,Carrier Global,carrier.com
+JCI,Johnson Controls,johnsoncontrols.com
+KMB,Kimberly-Clark,kimberly-clark.com
+CL,Colgate-Palmolive,colgatepalmolive.com
+EL,Estee Lauder,elcompanies.com
+MDLZ,Mondelez International,mondelezinternational.com
+HSY,Hershey Co.,thehersheycompany.com
+GIS,General Mills,generalmills.com
+K,Kellanova,kellanova.com
+SYY,Sysco Corp,sysco.com
+KR,Kroger Co.,thekrogerco.com
+TGT,Target Corp,target.com
+LOW,Lowe's Companies,lowes.com
+TJX,TJX Companies,tjx.com
+ROST,Ross Stores,rossstores.com
+DG,Dollar General,dollargeneral.com
+DLTR,Dollar Tree,dollartree.com
+BBY,Best Buy,bestbuy.com
+LIN,Linde plc,linde.com
+APD,Air Products,airproducts.com
+ECL,Ecolab,ecolab.com
+DOW,Dow Inc.,dow.com
+DD,Dupont,dupont.com
+SHW,Sherwin-Williams,sherwin-williams.com
+PPG,PPG Industries,ppg.com
+NEM,Newmont Corp,newmont.com
+FCX,Freeport-McMoRan,fcx.com
+WM,Waste Management,wm.com
+RSG,Republic Services,republicservices.com
+ORLY,O'Reilly Automotive,oreillyauto.com
+AZO,AutoZone,autozone.com
+TSCO,Tractor Supply,tractorsupply.com
+DHI,D.R. Horton,drhorton.com
+LEN,Lennar Corp,lennar.com
+PHM,PulteGroup,pultegroup.com
+AMT,American Tower,americantower.com
+PLD,Prologis,prologis.com
+EQIX,Equinix,equinix.com
+DLR,Digital Realty,digitalrealty.com
+WELL,Welltower,welltower.com
+SPG,Simon Property Group,simon.com
+O,Realty Income,realtyincome.com
+CME,CME Group,cmegroup.com
+ICE,Intercontinental Exchange,ice.com
+MCO,Moody's Corp,moodys.com
+SPGI,S&P Global,spglobal.com
+ADP,ADP Inc.,adp.com
+PAYX,Paychex,paychex.com
+IT,Gartner Inc.,gartner.com
+ACN,Accenture,accenture.com
+HPQ,HP Inc.,hp.com
+DELL,Dell Technologies,dell.com
+HPE,Hewlett Packard Enterprise,hpe.com
+NTAP,NetApp,netapp.com
+STX,Seagate Technology,seagate.com
+WDC,Western Digital,westerndigital.com
+APH,Amphenol,amphenol.com
+TEL,TE Connectivity,te.com
+GLW,Corning Inc.,corning.com
+MSI,Motorola Solutions,motorolasolutions.com
+CMCSA,Comcast Corp,comcast.com
+CHTR,Charter Communications,charter.com
+TMUS,T-Mobile US,t-mobile.com
+GILD,Gilead Sciences,gilead.com
+AMGN,Amgen Inc.,amgen.com
+BIIB,Biogen Inc.,biogen.com
+REGN,Regeneron,regeneron.com
+VRTX,Vertex Pharmaceuticals,vrtx.com
+ILMN,Illumina Inc.,illumina.com
+BSX,Boston Scientific,bostonscientific.com
+MDT,Medtronic,medtronic.com
+SYK,Stryker Corp,stryker.com
+ZBH,Zimmer Biomet,zimmerbiomet.com
+BAX,Baxter International,baxter.com
+BDX,BD (Becton Dickinson),bd.com
+EW,Edwards Lifesciences,edwardslifesciences.com
+ABBV,AbbVie Inc.,abbvie.com
+BMY,Bristol-Myers Squibb,bms.com
+LLY,Eli Lilly,lilly.com
+TMO,Thermo Fisher Scientific,thermofisher.com
+DHR,Danaher Corp,danaher.com
+A,Agilent Technologies,agilent.com
+CVS,CVS Health,cvshealth.com
+CI,Cigna Group,thecignagroup.com
+HUM,Humana Inc.,humana.com
+MCK,McKesson,mckesson.com
+CAH,Cardinal Health,cardinalhealth.com
+WBA,Walgreens Boots Alliance,walgreensbootsalliance.com
+BLK,BlackRock Inc.,blackrock.com
+SCHW,Charles Schwab,schwab.com
+PNC,PNC Financial,pnc.com
+USB,U.S. Bancorp,usbank.com
+TFC,Truist Financial,truist.com
+CB,Chubb Limited,chubb.com
+MMC,Marsh McLennan,mmc.com
+AON,Aon plc,aon.com
+AJG,Arthur J. Gallagher,ajg.com
+WTW,Willis Towers Watson,wtwco.com
+MET,MetLife,metlife.com
+PRU,Prudential Financial,prudential.com
+AFL,Aflac Inc.,aflac.com
+TRV,Travelers Companies,travelers.com
+ALL,Allstate Corp,allstate.com
+PGR,Progressive Corp,progressive.com
+COF,Capital One,capitalone.com
+DFS,Discover Financial,discover.com
+AIG,American International Group,aig.com
+HIG,Hartford Financial,hartford.com
+OKE,Oneok Inc.,oneok.com
+WMB,Williams Companies,williams.com
+KMI,Kinder Morgan,kindermorgan.com
+ETR,Entergy Corp,entergy.com
+PEG,Public Service Enterprise Group,pseg.com
+XEL,Xcel Energy,xcelenergy.com
+WEC,WEC Energy Group,wecenergygroup.com
+EIX,Edison International,edison.com
+PCG,Pacific Gas & Electric,pgecorp.com
+SRE,Sempra,sempra.com
+AEE,Ameren Corp,ameren.com
+CNP,CenterPoint Energy,centerpointenergy.com
+PPL,PPL Corp,pplcorp.com
+ATO,Atmos Energy,atmosenergy.com
+CMS,CMS Energy,cmsenergy.com
+DTE,DTE Energy,dteenergy.com
+LNG,Cheniere Energy,cheniere.com
+LYB,LyondellBasell,lyondellbasell.com
+CTVA,Corteva Inc.,corteva.com
+ENPH,Enphase Energy,enphase.com
+FSLR,First Solar,firstsolar.com
+NRG,NRG Energy,nrg.com
+CEG,Constellation Energy,constellationenergy.com

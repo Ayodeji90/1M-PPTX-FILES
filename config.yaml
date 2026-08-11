@@ -282,6 +282,43 @@ harvesters:
         - "site:gov"
         - "site:org"
         - "site:ac.uk"
+        # --- expanded 2026-08-11: more broadening terms + regional
+        # academic TLDs to push past the per-query result ceiling ---
+        - "board meeting"
+        - "investor day"
+        - "earnings call"
+        - "keynote"
+        - "slides"
+        - "deck"
+        - "presentation deck"
+        - "executive briefing"
+        - "policy brief"
+        - "project update"
+        - "technical talk"
+        - "graduation"
+        - "course materials"
+        - "exam review"
+        - "department meeting"
+        - "quarterly review"
+        - "annual meeting"
+        - "industry analysis"
+        - "market outlook"
+        - "economic outlook"
+        - "site:ac.jp"
+        - "site:ac.in"
+        - "site:edu.cn"
+        - "site:edu.au"
+        - "site:edu.mx"
+        - "site:ac.za"
+        - "site:edu.br"
+        - "site:edu.ph"
+        - "site:ac.id"
+        - "site:edu.pk"
+        - "site:ac.kr"
+        - "site:edu.tr"
+        - "site:gob.mx"
+        - "site:gov.in"
+        - "site:gov.br"
     # Standards / conference bodies: browsable autoindex directory trees
     # of directly-downloadable .ppt/.pptx.
     standards:
@@ -295,6 +332,10 @@ harvesters:
         - "https://www.open-std.org/"
         - "https://www.ieee802.org/"
     # Government / EU open-data portals running CKAN (res_format filter).
+    # Portals verified live with a working /api/3/action/package_search
+    # and non-empty PPT/PPTX resource counts (probed 2026-08-11); the
+    # filter + downloader drop anything without ppt/pptx anyway, so a
+    # portal that later goes quiet just yields nothing -- never an error.
     govdata:
       delay_s: 1.5
       rows: 100
@@ -313,6 +354,20 @@ harvesters:
         - "https://data.gov.gr"
         - "https://data.gov.sk"
         - "https://data.gov.cz"
+        # --- added 2026-08-11 (each verified to answer package_search
+        # with the exact res_format:(PPT OR PPTX) query used by the
+        # harvester; count can be 0 today -- it still costs one request
+        # per harvest pass and pays off when decks appear) ---
+        - "https://data.humdata.org"        # UN OCHA HDX -- biggest single CKAN (hits!)
+        - "https://data.gov.ua"             # Ukraine (hits!)
+        - "https://data.gov.ro"             # Romania
+        - "https://data.gov.lv"             # Latvia
+        - "https://datos.gob.ar"            # Argentina
+        - "https://datos.gob.cl"            # Chile
+        - "https://data.gov.il"             # Israel
+        - "https://podatki.gov.si"          # Slovenia (moved from data.gov.si)
+        # NOT added (verified non-working 2026-08-11): data.gov.hr serves
+        # HTML at the API path; data.europa.eu 307s to a 404 hub endpoint.
 
 multi_node:
   # Work is split across machines by hash(domain) % NODE_COUNT == NODE_ID

@@ -207,3 +207,19 @@ oer.avu.org
 open.edu
 ec.europa.eu
 data.europa.eu
+
+# --- Academic lecture-slide archives ---
+videolectures.net
+
+# --- Conference / operator-forum bodies with public deck archives ---
+# (added 2026-08-11; CDX finds historical .ppt/.pptx that current
+# sitemaps no longer list -- complements the live sitemap sources)
+nanog.org
+ripe.net
+apnic.net
+icann.org
+usenix.org
+defcon.org
+siggraph.org
+ndss-symposium.org
+fosdem.org
