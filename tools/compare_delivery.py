@@ -49,7 +49,10 @@ from pptxsweeper.delivery_compare import (  # noqa: E402
 )
 
 
-def _run(cmd: list[str], timeout: int = 1800) -> str:
+def _run(cmd: list[str], timeout: int = 7200) -> str:
+    """Run rclone. Default timeout is generous: bulk sidecar downloads of
+    ~17k small files are Google-Drive rate-limited to ~200/min, which can
+    take well over an hour for the big folders."""
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
         raise RuntimeError(f"command failed ({proc.returncode}): {' '.join(cmd)}\n"
@@ -57,10 +60,10 @@ def _run(cmd: list[str], timeout: int = 1800) -> str:
     return proc.stdout
 
 
-def _list_sidecars(rclone: str, remote_path: str) -> list[str]:
+def _list_sidecars(rclone: str, remote_path: str, timeout: int) -> list[str]:
     """Names of *.metadata.json files directly under remote_path."""
     proc = subprocess.run([rclone, "lsjson", remote_path], capture_output=True,
-                          text=True, timeout=1800)
+                          text=True, timeout=timeout)
     if proc.returncode != 0:
         # folder missing is fine (a machine that never delivered)
         if "directory not found" in (proc.stderr or "").lower():
@@ -75,7 +78,7 @@ def _list_sidecars(rclone: str, remote_path: str) -> list[str]:
 
 
 def _fetch_sidecars(rclone: str, remote_path: str, names: list[str],
-                    dest_dir: Path) -> int:
+                    dest_dir: Path, timeout: int) -> int:
     """Bulk-download the named sidecars via rclone copy (fast, parallel)."""
     if not names:
         return 0
@@ -87,7 +90,8 @@ def _fetch_sidecars(rclone: str, remote_path: str, names: list[str],
     list_file.write_text("\n".join(names), encoding="utf-8")
     _run([rclone, "copy", remote_path, str(dest_dir),
           "--files-from", str(list_file),
-          "--transfers", "48", "--checkers", "96"])
+          "--transfers", "48", "--checkers", "96"],
+         timeout=timeout)
     kept = 0
     for name in names:
         if (dest_dir / name).exists():
@@ -101,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("folders", nargs="+", help="Remote paths, e.g. gdrive:...")
     ap.add_argument("--out", default="./compare_out", help="Output directory")
     ap.add_argument("--rclone-bin", default="rclone")
+    ap.add_argument("--timeout", type=int, default=7200,
+                    help="Seconds before an rclone subprocess is killed "
+                         "(default 7200; big sidecar pulls are Drive-rate-limited)")
     args = ap.parse_args(argv)
 
     folders = args.folders
@@ -115,13 +122,14 @@ def main(argv: list[str] | None = None) -> int:
         tmp_dir = Path(tmp)
         for i, folder in enumerate(folders):
             print(f"[{i + 1}/{len(folders)}] {folder}", flush=True)
-            sidecars = _list_sidecars(args.rclone_bin, folder)
+            sidecars = _list_sidecars(args.rclone_bin, folder, args.timeout)
             print(f"  sidecars: {len(sidecars)}", flush=True)
             if not sidecars:
                 all_records.append((folder, []))
                 continue
             local_dir = tmp_dir / f"folder_{i}"
-            fetched = _fetch_sidecars(args.rclone_bin, folder, sidecars, local_dir)
+            fetched = _fetch_sidecars(args.rclone_bin, folder, sidecars,
+                                      local_dir, args.timeout)
             print(f"  downloaded: {fetched}", flush=True)
             records = load_records(sidecar_reader(local_dir))
             print(f"  parsed records: {len(records)}", flush=True)
