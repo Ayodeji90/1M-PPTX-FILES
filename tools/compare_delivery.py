@@ -80,9 +80,14 @@ def _fetch_sidecars(rclone: str, remote_path: str, names: list[str],
     if not names:
         return 0
     dest_dir.mkdir(parents=True, exist_ok=True)
-    # copy the whole folder but only keep the metadata sidecars locally
+    # `--files-from` reuses the lsjson result, so rclone does not have to
+    # enumerate the (much larger) folder again; small files are the Drive
+    # API rate limit, not rclone, so more transfers/checkers help a lot.
+    list_file = dest_dir / ".filelist.txt"
+    list_file.write_text("\n".join(names), encoding="utf-8")
     _run([rclone, "copy", remote_path, str(dest_dir),
-          "--include", "*.metadata.json", "--transfers", "16", "--checkers", "32"])
+          "--files-from", str(list_file),
+          "--transfers", "48", "--checkers", "96"])
     kept = 0
     for name in names:
         if (dest_dir / name).exists():
