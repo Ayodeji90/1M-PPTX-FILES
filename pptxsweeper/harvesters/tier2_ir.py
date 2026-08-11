@@ -44,7 +44,10 @@ class InvestorRelationsHarvester(Harvester):
         seeds = self._load_seeds()
         log.info("IR harvester: %d companies seeded", len(seeds))
         for company in seeds:
-            website = company.get("website", "").strip()
+            # csv.DictReader yields None for MISSING fields (short rows), so
+            # a bare .strip() on company.get("website") crashed the whole
+            # harvester whenever the seed file had a malformed row.
+            website = (company.get("website") or "").strip()
             if not website:
                 continue
             base_domain = urlsplit(website if "//" in website else f"https://{website}").netloc
@@ -67,7 +70,7 @@ class InvestorRelationsHarvester(Harvester):
     # ------------------------------------------------------------------
     async def _harvest_company(self, company: dict, base_domain: str
                                ) -> AsyncIterator[CandidateURL]:
-        ticker = company.get("ticker", "")
+        ticker = company.get("ticker") or ""   # None-safe (short CSV rows)
         ir_bases = [f"https://{p}{base_domain}" for p in _IR_HOST_PREFIXES]
         ir_bases += [f"https://{base_domain}{p}" for p in _IR_PATHS]
 

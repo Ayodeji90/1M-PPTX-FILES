@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from urllib.parse import urljoin, urlsplit
 
 from .base import CandidateURL, Harvester, register
 
@@ -70,13 +71,36 @@ class GovDataCkanHarvester(Harvester):
                     for res in dataset.get("resources", []):
                         fmt = (res.get("format") or "").strip()
                         url = res.get("url", "")
-                        if url and fmt in _PPT_FORMATS:
-                            yield CandidateURL(
-                                url=url, tier=self.tier,
-                                discovery_source=f"govdata:{urlhost(portal)}",
-                                metadata={"portal": portal, "format": fmt,
-                                          "dataset": dataset.get("name")},
-                            )
+                        if not url or fmt not in _PPT_FORMATS:
+                            continue
+                        # Some CKAN portals (e.g. open.canada.ca) return
+                        # RELATIVE resource paths (/data/dataset/...) with
+                        # no scheme/host. Absolutize against the portal
+                        # base; absolute URLs pass through unchanged. A URL
+                        # that still has no host is dropped here.
+                        abs_url = _absolute_resource_url(portal, url)
+                        if not abs_url:
+                            continue
+                        yield CandidateURL(
+                            url=abs_url, tier=self.tier,
+                            discovery_source=f"govdata:{urlhost(portal)}",
+                            metadata={"portal": portal, "format": fmt,
+                                      "dataset": dataset.get("name")},
+                        )
+
+
+def _absolute_resource_url(portal: str, url: str) -> str:
+    """Absolutize a CKAN resource URL against the portal base.
+
+    Some portals (e.g. open.canada.ca) return relative resource paths
+    (/data/dataset/...) with no scheme/host; joining against the portal
+    base recovers the full URL. Absolute URLs pass through unchanged.
+    Returns '' when no host can be recovered.
+    """
+    if not url:
+        return ""
+    joined = urljoin(portal.rstrip("/") + "/", url)
+    return joined if urlsplit(joined).netloc else ""
 
 
 def urlhost(url: str) -> str:

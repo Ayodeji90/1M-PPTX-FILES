@@ -56,6 +56,16 @@ def run_filter(cfg: Config, reg: Registry) -> dict:
         "WHERE status='discovered' ORDER BY id"
     ).fetchall():
         stats["scanned"] += 1
+        # Malformed URLs (no scheme / no host -- e.g. a portal returning
+        # relative resource paths) can never be fetched and must not burn
+        # download attempts. Rejected here, once, instead of 4 retries
+        # of exception noise in the downloader.
+        parsed = urlsplit(row["url"])
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            updates.append((row["id"], {"status": "filtered_out",
+                                        "reject_reason": "malformed_url"}))
+            stats["malformed_url"] = stats.get("malformed_url", 0) + 1
+            continue
         hit = blocklist.blocked(row["url"])
         if hit:
             updates.append((row["id"], {"status": "filtered_out",

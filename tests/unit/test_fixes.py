@@ -195,6 +195,81 @@ def test_config_override_missing_raises(tmp_path, monkeypatch):
         Config.load(start=tmp_path)
 
 
+# --- harvester / filter fixes (found live on the VM) ----------------------
+def test_govdata_relative_resource_urls_absolutized():
+    """open.canada.ca returns path-only resource URLs; they must be
+    absolutized against the portal base (and un-joinable URLs dropped)."""
+    from pptxsweeper.harvesters.tier7_govdata import _absolute_resource_url
+    portal = "https://open.canada.ca/data/en"
+    assert _absolute_resource_url(portal, "/data/dataset/abc/download/d.pptx") \
+        == "https://open.canada.ca/data/dataset/abc/download/d.pptx"
+    # absolute URLs pass through untouched
+    assert _absolute_resource_url(portal, "https://cdn.example.com/a.pptx") \
+        == "https://cdn.example.com/a.pptx"
+    # empty / hopeless inputs are dropped
+    assert _absolute_resource_url(portal, "") == ""
+    assert _absolute_resource_url(portal, "javascript:void(0)") == ""
+
+
+def test_filter_rejects_malformed_urls(tmp_path, registry):
+    """Scheme-less / host-less URLs must be filtered out in ONE pass instead
+    of burning download attempts."""
+    from pptxsweeper.config import Config
+    from pptxsweeper.stages.filter_stage import run_filter
+
+    (tmp_path / "block.txt").write_text("")
+    raw = {
+        "compliance": {"excluded_sources_file": None,
+                        "blocklist_file": "block.txt"},
+        "allowed_formats": ["pptx", "ppt"],
+        "filter": {"per_domain_cap": 10000, "tier_domain_caps": {}},
+    }
+    cfg = Config(raw, root=tmp_path, env_path=None)
+    reg = registry
+    reg.conn.executemany(
+        "INSERT INTO urls (url, domain, tier, discovery_source, status) "
+        "VALUES (?,?,?,?,?)",
+        [
+            ("/data/dataset/abc/download/x.pptx", "", 7, "govdata:open.canada.ca", "discovered"),
+            ("ftp://files.example.com/a.pptx", "files.example.com", 7, "govdata:data.gov.uk", "discovered"),
+            ("https://example.com/good.pptx", "example.com", 1, "wayback_cdx", "discovered"),
+        ],
+    )
+    stats = run_filter(cfg, reg)
+    assert stats["malformed_url"] == 2
+    statuses = {r["url"]: r["status"] for r in
+                reg.conn.execute("SELECT url, status FROM urls").fetchall()}
+    assert statuses["/data/dataset/abc/download/x.pptx"] == "filtered_out"
+    assert statuses["ftp://files.example.com/a.pptx"] == "filtered_out"
+    assert statuses["https://example.com/good.pptx"] == "discovered"
+
+
+def test_ir_harvester_none_website_does_not_crash(tmp_path):
+    """A seed row whose `website` field is None must not crash discover()
+    (regression for the .strip() AttributeError seen on the VM)."""
+    import asyncio
+    from pptxsweeper.harvesters.tier2_ir import InvestorRelationsHarvester
+
+    # NOTE: a SHORT row (missing trailing field) is what makes csv.DictReader
+    # yield website=None -- a literal "None" cell would be the truthy string
+    # "None" and would never reproduce the original crash.
+    seeds = tmp_path / "seeds.csv"
+    seeds.write_text("ticker,company,website\nAAA,Company A,https://a.example\nBBB,Company B\n")
+
+    h = InvestorRelationsHarvester.__new__(InvestorRelationsHarvester)
+    h.cfg = type("Cfg", (), {"raw": {"harvesters": {"tier2": {"seed_tickers_file": str(seeds)}}},
+                            "root": tmp_path})()
+    h.owns_domain = lambda _d: False   # never actually fetch
+
+    async def _go():
+        n = 0
+        async for _ in h.discover():
+            n += 1
+        return n
+
+    assert asyncio.run(_go()) == 0   # no crash, no candidates
+
+
 # --- wayback streaming size gates -----------------------------------------
 def test_wayback_oversize_returns_rejected_signal(tmp_path):
     """fetch_to_file must stream (not buffer), enforce max_bytes, and delete
