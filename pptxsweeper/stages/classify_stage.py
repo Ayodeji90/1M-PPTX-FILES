@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import threading
+import time
 from pathlib import Path
 
 from ..compliance.screens import run_screens
@@ -43,63 +46,99 @@ def _ram_available_mb() -> int | None:
     return None
 
 
+class _FileTimeout(Exception):
+    """Raised by the SIGALRM handler so a per-file compute timeout is
+    distinguishable from a TimeoutError raised elsewhere (e.g. a legacy
+    .ppt conversion timing out) -- both reject the file, but the reason
+    recorded stays accurate."""
+
+
 def _compute_task(task: dict) -> dict:
     """Pure per-file compute (validation, quality engine, screens) -- runs
     in a worker PROCESS; no registry access, plain dicts in and out so it
     pickles cleanly. Legacy .ppt conversion runs in the PARENT process
     (bounded by conversion.max_concurrent) so worker processes never spawn
-    LibreOffice; `preconverted` tasks are validated as converted .pptx."""
+    LibreOffice; `preconverted` tasks are validated as converted .pptx.
+
+    A pathological payload must never wedge a worker (and thus the whole
+    deliver chain) forever: `file_timeout_s` arms a SIGALRM so a hung
+    validate/quality pass is turned into a reject instead. Runs in the
+    worker's main thread, where signal.alarm is legal."""
+    import signal as _signal
     from ..download.validate import validate_payload
     from ..quality import classify as quality_classify
     from ..compliance.screens import run_screens
 
     payload = Path(task["payload"])
     preconverted = bool(task.get("preconverted"))
-    out: dict = {"url_id": task["url_id"], "payload": str(payload),
-                 "converted": 1 if preconverted else 0,
-                 "reject": None, "format": None, "slide_count": 0}
-    v = validate_payload(payload)
-    if not v.ok:
-        prefix = "converted_pptx_invalid" if preconverted else "validation"
-        out["reject"] = f"{prefix}:{v.reason}"
-        return out
-    if v.format not in task["allowed_formats"]:
-        out["reject"] = f"format_not_allowed:{v.format}"
-        return out
-    # Native .ppt normally never reaches here (converted in the parent);
-    # keep a worker-side fallback for direct API use.
-    if v.format == "ppt":
-        from ..convert import convert_ppt_to_pptx
-        res = convert_ppt_to_pptx(payload, Path(task["tmp_dir"]),
-                                  soffice_bin=task["soffice_bin"],
-                                  timeout_s=task["conv_timeout"])
-        if not res.ok:
-            out["reject"] = f"ppt_conversion_failed:{res.reason}"
-            return out
-        payload.unlink(missing_ok=True)
-        payload = res.output_path
-        out["payload"] = str(payload)
-        out["converted"] = 1
-        v = validate_payload(payload)
+    timeout_s = int(task.get("file_timeout_s") or 0)
+
+    def _run() -> dict:
+        run_payload = Path(task["payload"])
+        out: dict = {"url_id": task["url_id"], "payload": str(run_payload),
+                     "converted": 1 if preconverted else 0,
+                     "reject": None, "format": None, "slide_count": 0}
+        v = validate_payload(run_payload)
         if not v.ok:
-            out["reject"] = f"converted_pptx_invalid:{v.reason}"
+            prefix = "converted_pptx_invalid" if preconverted else "validation"
+            out["reject"] = f"{prefix}:{v.reason}"
             return out
-    out["format"] = v.format
-    report = quality_classify(payload, thresholds=task["thresholds"],
-                              image_thresholds=task["image_thresholds"],
-                              ocr_ambiguous_only=task["ocr"])
-    qrd = report.to_dict()   # carries doc_properties (extracted in one zip open)
-    screens = run_screens(report.full_text, robots_status=task["robots_status"])
-    out.update(
-        quality=report.quality, decision=report.decision,
-        feature_vectors=report.feature_vectors_json(),
-        quality_report=qrd, compliance=screens.to_dict(),
-        forces_reject=screens.forces_reject, forces_review=screens.forces_review,
-        screen_details=str(screens.details)[:300],
-        slide_count=report.slide_count or v.slide_count,
-        explanation=(report.explanations[-1] if report.explanations else "")[:300],
-    )
-    return out
+        if v.format not in task["allowed_formats"]:
+            out["reject"] = f"format_not_allowed:{v.format}"
+            return out
+        # Native .ppt normally never reaches here (converted in the parent);
+        # keep a worker-side fallback for direct API use.
+        if v.format == "ppt":
+            from ..convert import convert_ppt_to_pptx
+            res = convert_ppt_to_pptx(run_payload, Path(task["tmp_dir"]),
+                                      soffice_bin=task["soffice_bin"],
+                                      timeout_s=task["conv_timeout"])
+            if not res.ok:
+                out["reject"] = f"ppt_conversion_failed:{res.reason}"
+                return out
+            run_payload.unlink(missing_ok=True)
+            run_payload = res.output_path
+            out["payload"] = str(run_payload)
+            out["converted"] = 1
+            v = validate_payload(run_payload)
+            if not v.ok:
+                out["reject"] = f"converted_pptx_invalid:{v.reason}"
+                return out
+        out["format"] = v.format
+        report = quality_classify(run_payload, thresholds=task["thresholds"],
+                                  image_thresholds=task["image_thresholds"],
+                                  ocr_ambiguous_only=task["ocr"])
+        qrd = report.to_dict()   # carries doc_properties (extracted in one zip open)
+        screens = run_screens(report.full_text, robots_status=task["robots_status"])
+        out.update(
+            quality=report.quality, decision=report.decision,
+            feature_vectors=report.feature_vectors_json(),
+            quality_report=qrd, compliance=screens.to_dict(),
+            forces_reject=screens.forces_reject, forces_review=screens.forces_review,
+            screen_details=str(screens.details)[:300],
+            slide_count=report.slide_count or v.slide_count,
+            explanation=(report.explanations[-1] if report.explanations else "")[:300],
+        )
+        return out
+
+    def _timeout_handler(_signum, _frame):
+        raise _FileTimeout(f"classify file timeout after {timeout_s}s")
+
+    if timeout_s > 0:
+        old_handler = _signal.signal(_signal.SIGALRM, _timeout_handler)
+        _signal.alarm(timeout_s)
+    try:
+        return _run()
+    except _FileTimeout:
+        # Pathological payload: reject it (payload deleted by caller) so it
+        # can never hang a worker again -- the row ends terminal.
+        return {"url_id": task["url_id"], "payload": str(payload),
+                "converted": 1 if preconverted else 0,
+                "reject": "classify_timeout", "format": None, "slide_count": 0}
+    finally:
+        if timeout_s > 0:
+            _signal.alarm(0)
+            _signal.signal(_signal.SIGALRM, old_handler)
 
 
 class ClassifyStage:
@@ -123,6 +162,10 @@ class ClassifyStage:
         self.soffice_bin = conv["soffice_bin"]
         self.conversion_timeout = int(conv["timeout_s"])
         self.stats = {"deliver": 0, "review": 0, "reject": 0, "errors": 0}
+        self.file_timeout_s = int(self.cfg.raw.get("classify", {})
+                                  .get("file_timeout_s", 0))
+        self.max_run_minutes = float(self.cfg.raw.get("classify", {})
+                                     .get("max_run_minutes", 0))
 
     # ------------------------------------------------------------------
     def run(self, limit: int | None = None) -> dict:
@@ -141,6 +184,18 @@ class ClassifyStage:
         if not rows:
             return self.stats
 
+        self._done = threading.Event()
+        if self.max_run_minutes:
+            threading.Thread(target=self._watchdog, daemon=True).start()
+        try:
+            return self._run_workers(rows)
+        finally:
+            self._done.set()
+
+    # ------------------------------------------------------------------
+    def _run_workers(self, rows) -> dict:
+        """Body of run() after the empty check; wrapped so the watchdog
+        can observe completion. Keeps run() readable."""
         pairs: list[tuple[dict, dict]] = []   # (row, task)
         allowed = tuple(self.cfg.raw.get("allowed_formats", ["pptx", "ppt"]))
         seen_shas: set[str] = set()
@@ -168,6 +223,7 @@ class ClassifyStage:
                 "soffice_bin": self.soffice_bin, "conv_timeout": self.conversion_timeout,
                 "thresholds": self.thresholds, "image_thresholds": self.image_thresholds,
                 "ocr": self.ocr_ambiguous_only, "robots_status": row.get("robots_status"),
+                "file_timeout_s": self.file_timeout_s,
             }))
         if not pairs:
             return self.stats
@@ -243,6 +299,30 @@ class ClassifyStage:
                             self._persist_safe(row, fut.result())
         log.info("classify done (%d workers): %s", workers, self.stats)
         return self.stats
+
+    def _watchdog(self) -> None:
+        """Last-resort whole-run watchdog: if a classify pass exceeds
+        `max_run_minutes` (e.g. a worker hung past its per-file timeout,
+        or the pool deadlocked), force-exit the process so the orchestrator
+        re-runs the stage. Rows stay 'downloaded' and are re-picked.
+
+        Note: SIGALRM fires at bytecode boundaries, so a hang INSIDE a C
+        extension (lxml/PIL/numpy tight loop) can evade the per-file
+        timeout; in that case the watchdog converts a permanent wedge into
+        a slow restart loop. Still a strict improvement -- and os._exit
+        briefly orphans the in-flight worker processes, which exit on
+        their own once their current task finishes and the task pipe
+        closes (SQLite is WAL crash-safe, rows are re-picked)."""
+        if not self.max_run_minutes:
+            return
+        deadline = time.monotonic() + self.max_run_minutes * 60
+        while time.monotonic() < deadline:
+            time.sleep(30)
+            if self._done.is_set():
+                return
+        log.error("classify run exceeded %.0f min watchdog; force-exiting",
+                  self.max_run_minutes)
+        os._exit(1)
 
     def _parent_convert(self, task: dict) -> dict:
         """Convert a legacy .ppt in this (parent) process. Runs inside the

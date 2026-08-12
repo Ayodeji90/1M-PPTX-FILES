@@ -198,6 +198,19 @@ classify:
   workers: 0               # 0 = one per CPU core, then RAM-capped (see below)
   worker_memory_mb: 512    # per-worker working-set budget for the RAM cap
   chunk_limit: 150         # files per classify pass, so uploads interleave
+  # Per-file compute budget (seconds) inside each classify worker: a
+  # pathological payload that hangs validate/quality must become a reject,
+  # never wedge the worker -- and therefore never wedge the whole deliver
+  # chain (classify -> package -> Drive) the way a hung worker did.
+  # 0 disables. 300s is generous for a legitimately huge deck.
+  file_timeout_s: 300
+  # Whole-run watchdog (minutes): if a classify pass exceeds this, force-
+  # exit so the orchestrator re-runs it. 0 disables. Backstop for pool
+  # deadlocks the per-file timeout cannot catch. Generous on purpose: a
+  # legitimate 100-file chunk on 2 workers can take hours if files are
+  # slow (100 x file_timeout_s / 2 workers); the per-file timeout is the
+  # primary defense, this only trips on genuine wedges.
+  max_run_minutes: 120
   # Auto-promote manually-approved review files into delivery every N
   # hours (0 disables). Promotes BOTH quality-borderline and
   # compliance-flagged files; run `promote-review --quality-only` by hand
