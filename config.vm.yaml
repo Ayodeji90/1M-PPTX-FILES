@@ -42,6 +42,11 @@ classify:
   # never trigger, so review/ grew until the disk filled and wedged the OS.
   # 8 GB keeps it bounded while still holding plenty of borderline files.
   review_dir_cap_gb: 8
+  # Wedged classify runs (a worker stuck in a C extension past its SIGALRM
+  # budget) must self-heal fast on this box: 10 min of zero progress =
+  # quarantine the wedged files + restart. Normal runs take 2-6 min, and
+  # slow-but-progressing runs never trip it (it's progress-based).
+  watchdog_stall_min: 10
 
 conversion:
   # Global LibreOffice cap (conversions run in the classify parent). Each

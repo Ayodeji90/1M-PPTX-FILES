@@ -223,13 +223,16 @@ classify:
   # chain (classify -> package -> Drive) the way a hung worker did.
   # 0 disables. 300s is generous for a legitimately huge deck.
   file_timeout_s: 300
-  # Whole-run watchdog (minutes): if a classify pass exceeds this, force-
-  # exit so the orchestrator re-runs it. 0 disables. Backstop for pool
-  # deadlocks the per-file timeout cannot catch. Generous on purpose: a
-  # legitimate 100-file chunk on 2 workers can take hours if files are
-  # slow (100 x file_timeout_s / 2 workers); the per-file timeout is the
-  # primary defense, this only trips on genuine wedges.
-  max_run_minutes: 120
+  # Stall watchdog (minutes): if a classify pass makes NO progress for
+  # this long while tasks are still pending, the run is wedged (a worker
+  # hung inside a C extension past its SIGALRM budget -- signals are
+  # deferred until the C call returns, so the per-file timeout can be
+  # evaded). The wedged files are quarantined (payload deleted, row
+  # rejected) and the stage force-exits so the orchestrator re-runs
+  # cleanly. Progress-based, so slow-but-working runs (big decks, many
+  # .ppt conversions) are never false-positived -- only total stalls trip
+  # it. 0 disables.
+  watchdog_stall_min: 10
   # Auto-promote manually-approved review files into delivery every N
   # hours (0 disables). Promotes BOTH quality-borderline and
   # compliance-flagged files; run `promote-review --quality-only` by hand

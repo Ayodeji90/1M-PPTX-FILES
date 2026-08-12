@@ -183,8 +183,16 @@ class ClassifyStage:
         self.stats = {"deliver": 0, "review": 0, "reject": 0, "errors": 0}
         self.file_timeout_s = int(self.cfg.raw.get("classify", {})
                                   .get("file_timeout_s", 0))
-        self.max_run_minutes = float(self.cfg.raw.get("classify", {})
-                                     .get("max_run_minutes", 0))
+        # Stall watchdog: if a classify pass makes NO progress for this
+        # many minutes while tasks are still pending, the run is wedged
+        # (a worker hung inside a C extension past its SIGALRM budget --
+        # signals are deferred until the C call returns). Quarantine the
+        # wedged rows and force-exit so the orchestrator re-runs cleanly.
+        # 0 disables. Progress-based, so slow-but-working runs never trip it.
+        stall = self.cfg.raw.get("classify", {}).get("watchdog_stall_min")
+        if stall is None:   # legacy key
+            stall = self.cfg.raw.get("classify", {}).get("max_run_minutes", 0)
+        self.watchdog_stall_min = float(stall or 0)
 
     # ------------------------------------------------------------------
     def run(self, limit: int | None = None) -> dict:
@@ -202,7 +210,10 @@ class ClassifyStage:
             return self.stats
 
         self._done = threading.Event()
-        if self.max_run_minutes:
+        self._last_progress = time.monotonic()
+        self._remaining = len(rows)
+        self._run_row_ids = [r["id"] for r in rows]
+        if self.watchdog_stall_min:
             threading.Thread(target=self._watchdog, daemon=True).start()
         try:
             return self._run_workers(rows)
@@ -289,6 +300,8 @@ class ClassifyStage:
             for (row, _), result in zip(ordered,
                                         map(_compute_task, (t for _, t in ordered))):
                 self._persist_safe(row, result)
+                self._last_progress = time.monotonic()
+                self._remaining -= 1
         else:
             with ProcessPoolExecutor(max_workers=workers) as pool, \
                     ThreadPoolExecutor(max_workers=conv_max) as cpool:
@@ -310,35 +323,70 @@ class ClassifyStage:
                             else:
                                 # converted file joins the pool right away
                                 pending[pool.submit(_compute_task, result)] = row
+                            self._last_progress = time.monotonic()
+                            self._remaining -= 1
                         else:
                             row = pending.pop(fut)
                             self._persist_safe(row, fut.result())
+                            self._last_progress = time.monotonic()
+                            self._remaining -= 1
         log.info("classify done (%d workers): %s", workers, self.stats)
         return self.stats
 
     def _watchdog(self) -> None:
-        """Last-resort whole-run watchdog: if a classify pass exceeds
-        `max_run_minutes` (e.g. a worker hung past its per-file timeout,
-        or the pool deadlocked), force-exit the process so the orchestrator
-        re-runs the stage. Rows stay 'downloaded' and are re-picked.
-
-        Note: SIGALRM fires at bytecode boundaries, so a hang INSIDE a C
-        extension (lxml/PIL/numpy tight loop) can evade the per-file
-        timeout; in that case the watchdog converts a permanent wedge into
-        a slow restart loop. Still a strict improvement -- and os._exit
-        briefly orphans the in-flight worker processes, which exit on
-        their own once their current task finishes and the task pipe
-        closes (SQLite is WAL crash-safe, rows are re-picked)."""
-        if not self.max_run_minutes:
+        """Stall watchdog: if a classify pass makes NO progress for
+        `watchdog_stall_min` minutes while tasks are still pending, the
+        run is wedged -- a worker hung inside a C extension past its
+        SIGALRM budget (signals are deferred until the C call returns, so
+        the per-file timeout can be evaded). Quarantine the still-in-flight
+        rows (they can never be classified) and force-exit so the
+        orchestrator re-runs the stage cleanly; without the quarantine the
+        same files would wedge every re-run. os._exit briefly orphans the
+        worker processes, which exit on their own once the task pipe
+        closes (SQLite is WAL crash-safe; rows are re-picked)."""
+        if not self.watchdog_stall_min:
             return
-        deadline = time.monotonic() + self.max_run_minutes * 60
-        while time.monotonic() < deadline:
+        stall_s = self.watchdog_stall_min * 60
+        while not self._done.is_set():
             time.sleep(30)
             if self._done.is_set():
                 return
-        log.error("classify run exceeded %.0f min watchdog; force-exiting",
-                  self.max_run_minutes)
-        os._exit(1)
+            idle = time.monotonic() - self._last_progress
+            if idle > stall_s and self._remaining > 0:
+                log.error("classify stall watchdog: no progress for %.0f min "
+                          "with %d task(s) pending; quarantining and force-exiting",
+                          self.watchdog_stall_min, self._remaining)
+                self._quarantine_inflight()
+                os._exit(1)
+
+    def _quarantine_inflight(self) -> None:
+        """Mark every row from THIS run that is still 'downloaded' as
+        rejected and delete its payload -- those are the files that wedged
+        the run (persisted rows have already left 'downloaded', so they
+        are never touched). Without this the watchdog converts a permanent
+        wedge into an endless restart loop."""
+        ids = getattr(self, "_run_row_ids", None) or []
+        if not ids:
+            return
+        placeholders = ",".join("?" * len(ids))
+        rows = self.reg.conn.execute(
+            f"SELECT id, metadata FROM urls WHERE id IN ({placeholders}) "
+            "AND status='downloaded'", ids).fetchall()
+        pruned = 0
+        for r in rows:
+            row = dict(r)
+            try:
+                payload = self._payload_path(row)
+                if payload:
+                    payload.unlink(missing_ok=True)
+                self.reg.update_url(row["id"], status="rejected",
+                                    reject_reason="classify_watchdog_timeout")
+                pruned += 1
+            except Exception:
+                log.exception("quarantine failed for url id %s", row["id"])
+        if pruned:
+            log.error("QUARANTINED %d pathological file(s) that wedged "
+                      "classify (payloads deleted, rows rejected)", pruned)
 
     def _parent_convert(self, task: dict) -> dict:
         """Convert a legacy .ppt in this (parent) process. Runs inside the
