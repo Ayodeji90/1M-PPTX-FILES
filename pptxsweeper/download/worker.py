@@ -39,6 +39,43 @@ from .validate import sniff_format
 
 log = logging.getLogger("pptxsweeper.download")
 
+
+def _ram_available_gb() -> float | None:
+    """Free RAM in GiB via /proc/meminfo (Linux); None elsewhere."""
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _should_pause(reasons: set[str], backlog_count: int, backlog_cap: int,
+                  ram_free_gb: float | None, ram_min_gb: float,
+                  ram_resume_high_water: float = 1.2) -> set[str]:
+    """Update the set of download-pause reasons; empty means proceed.
+
+    Two independent gates: the 'downloaded' backlog cap (disk-buffer
+    bound) and free RAM (classify/soffice need headroom on small VMs --
+    a memory spike with no swap is what wedged the OS, killing sshd).
+    Both use hysteresis so a count/measurement at the boundary does not
+    flap pause/resume every loop."""
+    if backlog_cap:
+        if backlog_count >= backlog_cap:
+            reasons.add("backlog")
+        elif backlog_count <= backlog_cap * 0.8:
+            reasons.discard("backlog")
+    if ram_min_gb:
+        if ram_free_gb is None:
+            reasons.discard("ram")
+        elif ram_free_gb < ram_min_gb:
+            reasons.add("ram")
+        elif ram_free_gb >= ram_min_gb * ram_resume_high_water:
+            reasons.discard("ram")
+    return reasons
+
 def _filename_from_url(url: str) -> str:
     name = unquote(urlsplit(url).path.rsplit("/", 1)[-1]) or "unnamed"
     return name[:255]
@@ -88,11 +125,13 @@ class DownloadStage:
         # 'downloaded' (payloads on disk waiting for classify). Keeps the
         # download stage from outrunning classify and filling the disk.
         self.max_backlog = int(dl.get("max_downloaded_backlog", 0))
+        self.min_free_ram_gb = float(dl.get("min_free_ram_gb", 0))
         # How often the stage re-scans for newly discovered domains. A
         # long-running download must not starve domains harvested after it
         # started (see _domain_refresher).
         self.domain_refresh_s = float(dl.get("domain_refresh_s", 300))
         self._backlog_paused = asyncio.Event()
+        self._pause_reasons: set[str] = set()
         self.head_before_get = bool(cfg.raw["politeness"]["head_before_get"])
         self.wayback_enabled = bool(dl.get("wayback_fallback", True))
         self.tmp_dir = cfg.path("paths", "download_tmp_dir")
@@ -271,21 +310,29 @@ class DownloadStage:
                          "(%d total known)", added, len(self._known_domains))
 
     async def _backlog_monitor(self) -> None:
-        """Pause claiming when too many payloads are waiting for classify.
-        Runs in the download process; classify (a separate process) drains
-        'downloaded' rows, so the count drops and downloads resume. This
-        bounds tmp_downloads so the disk can never fill."""
-        if not self.max_backlog:
-            return
+        """Pause claiming when too many payloads are waiting for classify
+        (bounds tmp_downloads so the disk can never fill) OR when free RAM
+        is low (classify + LibreOffice conversions need headroom on small
+        VMs -- a memory spike with no swap is what wedged the whole OS
+        before, making sshd itself unresponsive). Runs in the download
+        process; classify (a separate process) drains 'downloaded' rows,
+        so the count drops and downloads resume."""
         while not self.stop_event.is_set():
-            n = await self.writer.call(self.reg.count_by_status, "downloaded")
-            if n >= self.max_backlog:
-                if not self._backlog_paused.is_set():
-                    log.warning("downloaded backlog %d >= cap %d; pausing downloads "
-                                "until classify catches up", n, self.max_backlog)
-                    self._backlog_paused.set()
-            elif self._backlog_paused.is_set() and n <= self.max_backlog * 0.8:
-                log.info("downloaded backlog %d back under cap; resuming downloads", n)
+            if self.max_backlog:
+                n = await self.writer.call(self.reg.count_by_status, "downloaded")
+            else:
+                n = 0
+            self._pause_reasons = _should_pause(
+                self._pause_reasons, n, self.max_backlog,
+                _ram_available_gb(), self.min_free_ram_gb)
+            if self._pause_reasons and not self._backlog_paused.is_set():
+                log.warning("pausing downloads: %s (backlog=%d/%d, free RAM %.1fGB)",
+                            sorted(self._pause_reasons), n, self.max_backlog,
+                            _ram_available_gb() or 0.0)
+                self._backlog_paused.set()
+            elif not self._pause_reasons and self._backlog_paused.is_set():
+                log.info("resuming downloads (backlog %d, free RAM %.1fGB)",
+                         n, _ram_available_gb() or 0.0)
                 self._backlog_paused.clear()
             await asyncio.sleep(15)
 

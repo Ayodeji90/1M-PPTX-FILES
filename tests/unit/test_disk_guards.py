@@ -102,6 +102,38 @@ def test_reclaim_deletes_stale_parts_and_keeps_fresh(tmp_path):
     assert len(kept) == 5                    # oldest rotated log dropped
 
 
+# ----------------------------------------------------------------------
+# _should_pause: backlog + free-RAM gates with hysteresis
+# ----------------------------------------------------------------------
+def test_pause_reasons_backlog_gate():
+    from pptxsweeper.download.worker import _should_pause
+    r = set()
+    assert _should_pause(r, backlog_count=1500, backlog_cap=1500,
+                         ram_free_gb=8.0, ram_min_gb=1.5) == {"backlog"}
+    # hysteresis: stays paused until count drops to 80% of cap (1200)
+    assert _should_pause(r, 1250, 1500, 8.0, 1.5) == {"backlog"}
+    assert _should_pause(r, 1100, 1500, 8.0, 1.5) == set()
+
+
+def test_pause_reasons_ram_gate():
+    from pptxsweeper.download.worker import _should_pause
+    r = set()
+    assert _should_pause(r, 0, 1500, ram_free_gb=0.8, ram_min_gb=1.5) == {"ram"}
+    # hysteresis: resume needs 1.2x headroom, so 1.5GB still paused
+    assert _should_pause(r, 0, 1500, 1.5, 1.5) == {"ram"}
+    assert _should_pause(r, 0, 1500, 2.0, 1.5) == set()
+
+
+def test_pause_reasons_combine_and_clear():
+    from pptxsweeper.download.worker import _should_pause
+    r = _should_pause(set(), 1500, 1500, 0.8, 1.5)   # both gates hit
+    assert r == {"backlog", "ram"}
+    r = _should_pause(r, 1100, 1500, 2.0, 1.5)        # both cleared
+    assert r == set()
+    # gates disabled (cap 0 / min 0) never add reasons
+    assert _should_pause(set(), 99999, 0, 0.1, 0) == set()
+
+
 def test_reclaim_deletes_orphaned_payloads_keeps_live(tmp_path, registry):
     orch = _mk_orch(tmp_path)
     registry.conn.execute(

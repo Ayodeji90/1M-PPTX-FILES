@@ -18,9 +18,12 @@ download:
   # also bounded by the number of live domains).
   concurrency: 32
   # Smaller disk buffer on the VM: pause downloads sooner so tmp_downloads
-  # can never fill a 30-64 GB boot disk.
+  # can never fill a 30-64 GB boot disk. 10 not 15: with the 4 GB hard
+  # floor (disk.hard_min_free_gb) plus 2 GB swap, a 10 GB floor gives
+  # downloads real working room instead of oscillating pause/resume at
+  # the boundary of a half-full disk.
   max_downloaded_backlog: 1500
-  min_free_disk_gb: 15
+  min_free_disk_gb: 10
 
 disk:
   # Tighter OS-level backstop on the small 30 GB boot disk.

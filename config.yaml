@@ -90,6 +90,12 @@ download:
   # (payloads are uploaded to Drive and deleted every batch); raise to
   # 20+ on a production VM with a dedicated disk.
   min_free_disk_gb: 5
+  # Downloads also pause when free RAM falls below this (0 disables).
+  # classify + LibreOffice conversions on a small VM can spike memory;
+  # with no swap that thrashes the whole OS until sshd itself stops
+  # responding. Pausing the (I/O-bound, light) downloader gives the
+  # memory-hungry stages headroom instead of competing with them.
+  min_free_ram_gb: 1.5
   shutdown_grace_s: 30             # SIGTERM: finish in-flight, then cancel
   db_writer_batch_size: 100        # commit every 50-200 rows
   db_writer_flush_interval_s: 2.0
