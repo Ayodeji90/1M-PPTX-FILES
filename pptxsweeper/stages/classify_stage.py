@@ -181,6 +181,7 @@ class ClassifyStage:
         self.soffice_bin = conv["soffice_bin"]
         self.conversion_timeout = int(conv["timeout_s"])
         self.stats = {"deliver": 0, "review": 0, "reject": 0, "errors": 0}
+        self._pool = None   # set while _run_workers owns a ProcessPoolExecutor
         self.file_timeout_s = int(self.cfg.raw.get("classify", {})
                                   .get("file_timeout_s", 0))
         # Stall watchdog: if a classify pass makes NO progress for this
@@ -305,6 +306,7 @@ class ClassifyStage:
         else:
             with ProcessPoolExecutor(max_workers=workers) as pool, \
                     ThreadPoolExecutor(max_workers=conv_max) as cpool:
+                self._pool = pool   # so the watchdog can kill the workers
                 pending: dict = {}        # classify future -> row
                 conversions: dict = {}    # convert future -> (row, task)
                 for row, task in native_pairs:
@@ -356,8 +358,24 @@ class ClassifyStage:
                 log.error("classify stall watchdog: no progress for %.0f min "
                           "with %d task(s) pending; quarantining and force-exiting",
                           self.watchdog_stall_min, self._remaining)
+                self._kill_pool_workers()
                 self._quarantine_inflight()
                 os._exit(1)
+
+    def _kill_pool_workers(self) -> None:
+        """SIGKILL the ProcessPoolExecutor workers before the parent
+        force-exits. Without this, a worker hung inside a C extension
+        survives its parent (os._exit orphans it) and lingers forever at
+        0% CPU holding RAM + open file descriptors -- one leak per wedge
+        event. Killing the pool guarantees they die with the stage."""
+        pool = self._pool
+        if pool is None:
+            return
+        try:
+            for proc in list(getattr(pool, "_processes", {}).values()):
+                proc.kill()
+        except Exception:
+            log.exception("failed to kill classify pool workers")
 
     def _quarantine_inflight(self) -> None:
         """Mark every row from THIS run that is still 'downloaded' as
