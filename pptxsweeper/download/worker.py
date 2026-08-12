@@ -39,22 +39,35 @@ from .validate import sniff_format
 
 log = logging.getLogger("pptxsweeper.download")
 
-_DOC_CONTENT_TYPES = (
-    "application/vnd.openxmlformats-officedocument.presentationml",
-    "application/vnd.ms-powerpoint",
-    "application/pdf",
-    "application/octet-stream",
-    "binary/octet-stream",
-    "application/zip",
-    "application/x-zip",
-    "application/download",
-    "application/force-download",
-)
-
-
 def _filename_from_url(url: str) -> str:
     name = unquote(urlsplit(url).path.rsplit("/", 1)[-1]) or "unnamed"
     return name[:255]
+
+
+def _head_verdict(status_code: int, content_type: str | None,
+                  content_length: str | None, max_bytes: int,
+                  min_bytes: int) -> str:
+    """Map a HEAD response to a gate verdict: 'ok' | 'skip_html' |
+    'skip_size' | 'retry'.
+
+    HEAD failures are never fatal (many servers reject HEAD) -- only a
+    *successful* HEAD may gate. Only 429/5xx warrant a retry: a HEAD 403
+    usually means the server rejects HEAD for this resource (e.g. S3
+    presigned URLs are GET-signed only, so figshare links always 403 on
+    HEAD) while GET succeeds -- fall through and let GET decide.
+    """
+    if status_code == 429 or status_code >= 500:
+        return "retry"
+    if status_code >= 400:  # let GET see the definitive 404/403
+        return "ok"
+    ctype = (content_type or "").lower().split(";")[0].strip()
+    if ctype and ctype.startswith("text/html"):
+        return "skip_html"
+    if content_length and content_length.isdigit():
+        n = int(content_length)
+        if n > max_bytes or n < min_bytes:
+            return "skip_size"
+    return "ok"
 
 
 class DownloadStage:
@@ -75,6 +88,10 @@ class DownloadStage:
         # 'downloaded' (payloads on disk waiting for classify). Keeps the
         # download stage from outrunning classify and filling the disk.
         self.max_backlog = int(dl.get("max_downloaded_backlog", 0))
+        # How often the stage re-scans for newly discovered domains. A
+        # long-running download must not starve domains harvested after it
+        # started (see _domain_refresher).
+        self.domain_refresh_s = float(dl.get("domain_refresh_s", 300))
         self._backlog_paused = asyncio.Event()
         self.head_before_get = bool(cfg.raw["politeness"]["head_before_get"])
         self.wayback_enabled = bool(dl.get("wayback_fallback", True))
@@ -128,10 +145,14 @@ class DownloadStage:
         # busy on a DIFFERENT domain instead of one worker serially walking
         # a static shard of domains (whose per-domain delays never overlap).
         self._domain_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._known_domains: set[str] = set(domains)
         for domain in sorted(domains):
             self._domain_queue.put_nowait(domain)
         self._active_domains = 0
-        n_workers = min(self.concurrency, len(domains))
+        # Spawn the full pool up front: the domain refresher keeps adding
+        # freshly harvested domains, so the worker count must not be pinned
+        # by how few domains existed at startup (idle workers just wait).
+        n_workers = self.concurrency
         log.info("downloading from %d domains across %d workers (node %d/%d)%s",
                  len(domains), n_workers, self.node.node_id, self.node.node_count,
                  " [DRY RUN]" if self.dry_run else "")
@@ -156,6 +177,7 @@ class DownloadStage:
         self.writer.start()
         grace = float(self.cfg.raw["download"].get("shutdown_grace_s", 30))
         backlog_task = asyncio.create_task(self._backlog_monitor())
+        refresher_task = asyncio.create_task(self._domain_refresher())
         workers = asyncio.gather(
             *(self._worker(i) for i in range(n_workers)),
             return_exceptions=True,
@@ -180,6 +202,7 @@ class DownloadStage:
         finally:
             stop_waiter.cancel()
             backlog_task.cancel()
+            refresher_task.cancel()
             await self.writer.stop()
             await self.client.aclose()
         log.info("download stage done: %s", self.stats)
@@ -222,6 +245,31 @@ class DownloadStage:
                 )
 
     # ------------------------------------------------------------------
+    async def _domain_refresher(self) -> None:
+        """Keep the live domain queue in sync with the registry.
+
+        The queue is built once at startup; without this a single domain
+        that never drains (e.g. a HEAD-403 retry loop) pins the stage
+        open, the orchestrator never re-runs `download`, and every domain
+        harvested afterwards sits unclaimed forever. Every refresh, scan
+        for discovered domains and enqueue any not yet known."""
+        while not self.stop_event.is_set():
+            await asyncio.sleep(self.domain_refresh_s)
+            try:
+                fresh = await self.writer.call(self.reg.distinct_domains, "discovered")
+            except Exception:
+                log.exception("domain refresh scan failed")
+                continue
+            added = 0
+            for domain in fresh:
+                if domain not in self._known_domains:
+                    self._known_domains.add(domain)
+                    self._domain_queue.put_nowait(domain)
+                    added += 1
+            if added:
+                log.info("domain refresher: enqueued %d newly discovered domain(s) "
+                         "(%d total known)", added, len(self._known_domains))
+
     async def _backlog_monitor(self) -> None:
         """Pause claiming when too many payloads are waiting for classify.
         Runs in the download process; classify (a separate process) drains
@@ -267,7 +315,10 @@ class DownloadStage:
                     self.reg.claim_urls, [domain], self.claim_batch_size
                 )
                 if not rows:
-                    continue        # domain exhausted: drop it (don't requeue)
+                    # Domain exhausted: drop it (don't requeue), and forget
+                    # it so the refresher re-adds it if it gains new URLs.
+                    self._known_domains.discard(domain)
+                    continue
                 for row in rows:
                     if self.stop_event.is_set():
                         self.writer.update_url(row["id"], status="discovered")
@@ -391,21 +442,15 @@ class DownloadStage:
             resp = await self.client.head(url)
         except httpx.HTTPError:
             return "ok"
-        if resp.status_code in RETRYABLE_STATUS:
-            return "retry"
-        if resp.status_code >= 400:  # let GET see the definitive 404
-            return "ok"
-        ctype = resp.headers.get("content-type", "").lower().split(";")[0].strip()
-        if ctype and ctype.startswith("text/html"):
-            return "skip_html"
-        if ctype and not any(ctype.startswith(t) for t in _DOC_CONTENT_TYPES):
-            log.debug("suspicious content-type %s for %s; letting GET+magic decide", ctype, url)
-        clen = resp.headers.get("content-length")
-        if clen and clen.isdigit():
-            n = int(clen)
-            if n > self.max_bytes or n < self.min_bytes:
-                return "skip_size"
-        return "ok"
+        # Only 429/5xx on HEAD warrant a retry. A HEAD 403 is NOT
+        # retryable: it usually means the server rejects HEAD for this
+        # resource (e.g. S3 presigned URLs are GET-signed only, so figshare
+        # links always 403 on HEAD) while GET succeeds -- fall through and
+        # let GET decide.
+        return _head_verdict(resp.status_code,
+                             resp.headers.get("content-type"),
+                             resp.headers.get("content-length"),
+                             self.max_bytes, self.min_bytes)
 
     async def _stream_download(self, url: str, part_path: Path
                                ) -> tuple[int, str, int, bool]:

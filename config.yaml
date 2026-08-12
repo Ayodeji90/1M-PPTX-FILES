@@ -83,6 +83,12 @@ download:
   claim_batch_size: 25             # urls claimed per worker per round
   max_attempts: 4                  # per-URL attempts before dead/wayback
   wayback_fallback: true           # archived copy when origin dead/blocked
+  # Re-scan the registry this often and enqueue newly discovered domains
+  # into the live work queue. Without this a long-running download stage
+  # starves every domain harvested after it started (the stage only exits
+  # when its queue drains, and the orchestrator only re-runs `download`
+  # after the previous stage exits).
+  domain_refresh_s: 300
 
 politeness:
   default_delay_s: 1.5      # per-domain; robots.txt Crawl-delay always wins
