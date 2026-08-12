@@ -24,6 +24,10 @@ download:
   # the boundary of a half-full disk.
   max_downloaded_backlog: 1500
   min_free_disk_gb: 10
+  # Pause downloads early on this RAM-tight box so classify + LibreOffice
+  # conversions (the memory hogs) always have headroom. The cgroup cap on
+  # the service (MemoryMax=6G) is the backstop; this avoids hitting it.
+  min_free_ram_gb: 2.5
 
 disk:
   # Tighter OS-level backstop on the small 30 GB boot disk.
@@ -41,6 +45,11 @@ classify:
 
 conversion:
   # Global LibreOffice cap (conversions run in the classify parent). Each
-  # soffice needs ~0.5-1 GiB transient RAM, so 2 max on an 8 GiB box.
-  max_concurrent: 2
+  # soffice needs ~0.5-1 GiB transient RAM. Set to 1 on this box: 2
+  # concurrent soffice + 2 classify workers peaked at ~3.8 GiB in the
+  # first minute and, combined with the 2 GiB swap, pushed the box into
+  # a swap-thrash death spiral (OS freeze, sshd unreachable, cold-reboot
+  # only). 1 conversion at a time keeps classify's working set well under
+  # the service cgroup cap (deploy/pptxsweeper.service MemoryMax=6G).
+  max_concurrent: 1
   timeout_s: 180           # a little more headroom for big legacy .ppt

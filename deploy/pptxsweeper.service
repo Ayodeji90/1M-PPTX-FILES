@@ -45,6 +45,29 @@ TimeoutStopSec=120
 LimitNOFILE=65536
 # WAL sqlite + a few subprocesses; raise the soft limit slightly.
 LimitNPROC=1024
+# ----------------------------------------------------------------------
+# MEMORY ARMOR (prevents OS-level wedge): the pipeline shares the box
+# with sshd/journald/systemd. If classify + LibreOffice conversions ever
+# exhaust RAM *and* swap, the kernel enters a swap-thrash death spiral --
+# 100% CPU swapping, every process (incl. sshd) freezes, and the OOM
+# killer never fires because memory is "reclaimable" (it's all in swap).
+# The box becomes a zombie that only a cold reboot fixes.
+#
+# These cgroup limits convert that into a CLEAN SERVICE RESTART:
+#   MemoryHigh=5G     soft cap -- kernel applies reclaim pressure early
+#   MemoryMax=6G      hard cap  -- cgroup OOM below this kills ONLY the
+#                     pipeline's processes, never the OS (which keeps
+#                     ~1.8G RAM + swap for itself: sshd stays alive)
+#   MemorySwapMax=1G  the pipeline may only thrash 1G of swap, so it
+#                     can never drag the whole box into the spiral
+#   OOMPolicy=kill    on cgroup OOM, systemd kills the service and
+#                     Restart=always brings it back in ~30s
+# Rows are crash-safe (WAL sqlite + resumable stages): a memory-spike
+# restart loses nothing but the stuck time.
+MemoryHigh=5G
+MemoryMax=6G
+MemorySwapMax=1G
+OOMPolicy=kill
 
 [Install]
 WantedBy=multi-user.target
