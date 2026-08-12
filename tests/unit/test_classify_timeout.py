@@ -112,3 +112,53 @@ def test_valid_payload_still_delivers_with_timeout_on(decks, monkeypatch):
     out = _compute_task(_task(decks, file_timeout_s=30))
     assert out["reject"] is None
     assert out["decision"] == "DELIVER"
+
+
+def test_run_workers_pool_path_end_to_end(tmp_path, decks):
+    """THE regression for the production crash: the ProcessPoolExecutor
+    branch of `_run_workers` NameError'd because the futures imports were
+    (wrongly) scoped inside `run()` -- so EVERY classify pass crashed at
+    the pool line, classify never printed "done", and the deliver chain
+    (classify -> package -> Drive) froze while downloads kept flowing.
+    This drives the REAL pool path with real decks and a real registry:
+    chart_heavy must DELIVER, text_heavy must REJECT, zero errors.
+    """
+    import hashlib
+    import json
+    import shutil
+
+    from pptxsweeper.config import Config
+    from pptxsweeper.db.dao import Registry
+    from pptxsweeper.stages.classify_stage import ClassifyStage
+
+    cfg = Config.load()
+    cfg.raw["paths"]["data_dir"] = str(tmp_path)
+    cfg.raw["paths"]["download_tmp_dir"] = str(tmp_path / "tmp")
+    cfg.raw["paths"]["staging_dir"] = str(tmp_path / "staging")
+    cfg.raw["paths"]["review_dir"] = str(tmp_path / "review")
+    cfg.raw["classify"]["workers"] = 2   # force the multi-process pool path
+    cfg.raw["quality"]["use_ocr"] = False
+
+    reg = Registry(tmp_path / "registry.db")
+    urls = ["https://example.com/chart.pptx", "https://example.com/text.pptx"]
+    for idx, (url, key) in enumerate(zip(urls, ("chart_heavy", "text_heavy"))):
+        dst = tmp_path / f"url{idx}.pptx"
+        shutil.copyfile(decks[key], dst)
+        sha = hashlib.sha256(dst.read_bytes()).hexdigest()
+        with reg.tx():
+            reg.conn.execute(
+                "INSERT INTO urls (url, domain, tier, discovery_source, status, "
+                "sha256, metadata) VALUES (?,?,?,?,?,?,?)",
+                (url, "example.com", 1, "test", "downloaded", sha,
+                 json.dumps({"local_path": str(dst)})))
+
+    stage = ClassifyStage(cfg, reg)
+    stats = stage.run()
+    assert stats["errors"] == 0, stats
+    assert stats["deliver"] == 1, stats   # chart_heavy -> staging
+    assert stats["reject"] == 1, stats    # text_heavy -> payload deleted
+    assert len(list((tmp_path / "staging").glob("*.pptx"))) == 1
+    statuses = {r["url"]: r["status"]
+                for r in reg.conn.execute("SELECT url, status FROM urls")}
+    assert statuses[urls[0]] == "classified"
+    assert statuses[urls[1]] == "rejected"

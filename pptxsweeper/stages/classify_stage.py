@@ -21,6 +21,8 @@ import os
 import shutil
 import threading
 import time
+from concurrent.futures import (FIRST_COMPLETED, ProcessPoolExecutor,
+                                ThreadPoolExecutor, wait)
 from pathlib import Path
 
 from ..compliance.screens import run_screens
@@ -172,8 +174,6 @@ class ClassifyStage:
         """Parallel classification: the pure compute (validate/convert/
         quality/screens) fans out to one worker process per CPU core;
         this process does all registry writes and file moves."""
-        import os as _os
-        from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self.review_dir.mkdir(parents=True, exist_ok=True)
         if limit is None:
@@ -231,7 +231,7 @@ class ClassifyStage:
         # RAM-aware worker cap: each worker holds numpy/PIL/lxml + one
         # deck's images; never spawn more workers than available RAM allows
         # (config classify.worker_memory_mb sets the per-worker budget).
-        workers = int(self.cfg.raw.get("classify", {}).get("workers", 0)) or _os.cpu_count() or 2
+        workers = int(self.cfg.raw.get("classify", {}).get("workers", 0)) or os.cpu_count() or 2
         mem_budget_mb = int(self.cfg.raw.get("classify", {}).get("worker_memory_mb", 512))
         avail_mb = _ram_available_mb()
         if avail_mb is not None:
@@ -273,7 +273,6 @@ class ClassifyStage:
                                         map(_compute_task, (t for _, t in ordered))):
                 self._persist_safe(row, result)
         else:
-            from concurrent.futures import FIRST_COMPLETED, wait
             with ProcessPoolExecutor(max_workers=workers) as pool, \
                     ThreadPoolExecutor(max_workers=conv_max) as cpool:
                 pending: dict = {}        # classify future -> row
