@@ -29,6 +29,14 @@ from pptxsweeper.db.dao import Registry
 from pptxsweeper.stages.classify_stage import ClassifyStage
 
 
+@pytest.fixture(autouse=True)
+def _clean_config_env(monkeypatch):
+    """Other tests set PPTXSWEEPER_OVERRIDE/PPTXSWEEPER_CONFIG; clear them
+    so Config.load() here always reads the real config.yaml."""
+    monkeypatch.delenv("PPTXSWEEPER_OVERRIDE", raising=False)
+    monkeypatch.delenv("PPTXSWEEPER_CONFIG", raising=False)
+
+
 def _insert_url(reg: Registry, url: str, status: str, payload: str) -> int:
     sha = hashlib.sha256(payload.encode()).hexdigest()
     with reg.tx():
