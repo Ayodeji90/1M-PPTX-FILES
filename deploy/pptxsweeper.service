@@ -13,7 +13,11 @@
 #   journalctl -u pptxsweeper -n 200      # recent logs
 #
 # Notes:
-#   - Adjust User= / WorkingDirectory= to your VM user and repo path.
+#   - Paths below are for the primary Azure VM. If you deploy to another
+#     machine, change User=/WorkingDirectory=/EnvironmentFile=/ExecStart=
+#     to that box's repo path FIRST -- the template is not portable
+#     verbatim (a wrong path makes the unit fail with "Failed to load
+#     environment files").
 #   - PPTXSWEEPER_OVERRIDE points at the VM tuning profile (config.vm.yaml).
 #   - .env must exist in WorkingDirectory (CONTACT_EMAIL, NODE_ID, ...).
 #   - First-time rclone auth still needs one manual step (see DEPLOY.md:
@@ -30,10 +34,10 @@ Wants=network-online.target
 Type=simple
 User=azureuser
 Group=azureuser
-WorkingDirectory=/home/azureuser/pptxsweeper
+WorkingDirectory=/home/azureuser/1M-PPTX-FILES
 Environment=PPTXSWEEPER_OVERRIDE=config.vm.yaml
-EnvironmentFile=/home/azureuser/pptxsweeper/.env
-ExecStart=/home/azureuser/pptxsweeper/.venv/bin/pptxsweeper run
+EnvironmentFile=/home/azureuser/1M-PPTX-FILES/.env
+ExecStart=/home/azureuser/1M-PPTX-FILES/.venv/bin/pptxsweeper run
 Restart=always
 RestartSec=30
 # SIGTERM lets the pipeline finish in-flight work gracefully (download
