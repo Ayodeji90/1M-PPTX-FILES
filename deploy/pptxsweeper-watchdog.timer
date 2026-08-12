@@ -1,0 +1,12 @@
+# Runs the pptxsweeper watchdog every 10 minutes: restarts the pipeline
+# service if it is down or wedged, so the unattended VM self-heals.
+[Unit]
+Description=PptxSweeper watchdog timer (every 10 min)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Unit=pptxsweeper-watchdog.service
+
+[Install]
+WantedBy=timers.target

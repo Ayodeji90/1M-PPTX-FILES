@@ -57,6 +57,19 @@ upload:
   max_retries: 5
   retry_backoff_s: [10, 30, 120, 300, 900]
 
+disk:
+  # OS-level backstop: the orchestrator refuses to start ANY stage
+  # (download/classify/package) when free disk on the data dir falls
+  # below this. The download stage has its own finer guard
+  # (download.min_free_disk_gb); this one protects the WHOLE box from
+  # the unguarded consumers -- staging/, batch_build/, review/, logs --
+  # so a stalled Drive upload can never fill the disk and wedge the OS
+  # (which is exactly what kills the VM: sshd itself stops responding).
+  hard_min_free_gb: 2
+  # Sweep before each download cycle: delete *.part files older than
+  # this (interrupted-run leftovers, safe to drop) and old rotated logs.
+  reclaim_max_age_h: 24
+
 download:
   max_content_length_mb: 300
   min_content_length_kb: 10

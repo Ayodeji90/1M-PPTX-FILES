@@ -1,0 +1,10 @@
+# Runs pptxsweeper-watchdog.sh once (triggered by the .timer). A one-shot
+# service so the script's stdout/logging lands in journalctl.
+[Unit]
+Description=PptxSweeper watchdog check
+Wants=pptxsweeper.service
+
+[Service]
+Type=oneshot
+# Repo dir must match the pptxsweeper.service WorkingDirectory.
+ExecStart=/usr/local/bin/pptxsweeper-watchdog.sh /home/azureuser/1M-PPTX-FILES

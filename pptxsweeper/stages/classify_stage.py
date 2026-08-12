@@ -31,8 +31,25 @@ from ..db.dao import Registry
 from ..convert import convert_ppt_to_pptx
 from ..download.validate import validate_payload
 from ..quality import classify as quality_classify
+from ..utils.disk import free_gb
 
 log = logging.getLogger("pptxsweeper.classify")
+
+
+def review_prune_limit(cap_gb: float, free_gb: float, hard_min_gb: float,
+                       safety_gb: float = 3.0) -> int:
+    """Max review/ size in bytes: min(configured cap, disk-safe bound).
+
+    The configured cap is a ceiling, but it must never exceed what the
+    disk can actually hold -- otherwise review/ grows until the disk
+    fills and wedges the whole OS (sshd itself stops responding). The
+    disk-safe bound is what fits on top of the hard floor plus a safety
+    margin; it collapses to 0 when the disk is critically low so review/
+    is pruned back to nothing (its files are already synced to Drive).
+    """
+    cap = int(cap_gb * 1024 ** 3)
+    disk_safe = int(max(0.0, free_gb - hard_min_gb - safety_gb) * 1024 ** 3)
+    return min(cap, disk_safe)
 
 
 def _ram_available_mb() -> int | None:
@@ -483,16 +500,46 @@ class ClassifyStage:
         return written
 
     def sync_review_to_drive(self, rclone) -> None:
-        """Sync review/ to Drive _review/ and prune local payloads to cap."""
+        """Sync review/ to Drive _review/ and prune local payloads to cap.
+
+        The prune cap is bounded by real free disk (review_prune_limit):
+        an oversized configured cap (or a stalled Drive upload) must never
+        be able to fill the boot disk and wedge the OS."""
         review_folder = self.cfg.raw["rclone"]["review_folder"]
+        hard_min = float(self.cfg.raw.get("disk", {}).get("hard_min_free_gb", 2))
         self._write_review_sidecars()
         rclone.mkdir(review_folder)
         rclone.copy_dir(self.review_dir, review_folder)
         if not rclone.check(self.review_dir, review_folder,
                             method=self.cfg.raw["rclone"]["verify_method"]):
             log.warning("review sync verification failed; keeping local payloads")
+            # Last line of defense: if the disk is about to die (free <
+            # hard floor) AND the sync failed, prune the OLDEST payloads
+            # (>=48h old, so anything recent gets many more sync chances)
+            # to keep the OS from wedging. Review payloads are borderline
+            # candidates, not delivered product -- losing one is far
+            # cheaper than a wedged box. Narrow trigger on purpose: one
+            # transient rclone verify failure must NOT cost unsynced data.
+            if free_gb(self.review_dir) < hard_min + 0.5:
+                cutoff = time.time() - 48 * 3600
+                pruned = 0
+                for f in sorted(self.review_dir.iterdir(),
+                                key=lambda p: p.stat().st_mtime):
+                    if free_gb(self.review_dir) >= hard_min + 0.5:
+                        break
+                    if f.is_file() and f.stat().st_mtime < cutoff:
+                        f.unlink()
+                        pruned += 1
+                        log.warning("emergency-pruned unsynced review payload %s "
+                                    "(disk critical)", f.name)
+                if pruned:
+                    log.error("DISK CRITICAL: emergency-pruned %d review payload(s) "
+                              "that may not be on Drive yet", pruned)
             return
-        cap_bytes = float(self.cfg.raw["classify"]["review_dir_cap_gb"]) * 1024 ** 3
+        cap_bytes = review_prune_limit(
+            float(self.cfg.raw["classify"]["review_dir_cap_gb"]),
+            free_gb(self.review_dir), hard_min,
+        )
         files = sorted(self.review_dir.iterdir(), key=lambda p: p.stat().st_mtime)
         total = sum(f.stat().st_size for f in files if f.is_file())
         for f in files:

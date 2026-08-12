@@ -22,11 +22,19 @@ download:
   max_downloaded_backlog: 1500
   min_free_disk_gb: 15
 
+disk:
+  # Tighter OS-level backstop on the small 30 GB boot disk.
+  hard_min_free_gb: 4
+  reclaim_max_age_h: 24
+
 classify:
   workers: 2               # 2 vCPU -> 2 quality-engine workers
   worker_memory_mb: 512    # per-worker working-set budget for the RAM cap
   chunk_limit: 100         # smaller passes so uploads interleave nicely
-  review_dir_cap_gb: 40
+  # review/ payloads must FIT the 30 GB boot disk: the old 40 GB cap could
+  # never trigger, so review/ grew until the disk filled and wedged the OS.
+  # 8 GB keeps it bounded while still holding plenty of borderline files.
+  review_dir_cap_gb: 8
 
 conversion:
   # Global LibreOffice cap (conversions run in the classify parent). Each

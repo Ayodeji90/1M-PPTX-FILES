@@ -25,6 +25,7 @@ import time
 from .config import Config
 from .node import NodeIdentity
 from .packager.rclone import Rclone
+from .utils.disk import free_gb
 
 RCLONE_HELP = """\
 Google Drive is not connected yet (rclone remote '{remote}' not found).
@@ -94,6 +95,80 @@ class Orchestrator:
         self.harvest_sources = wanted
 
     # ------------------------------------------------------------------
+    def _disk_ok(self) -> bool:
+        """OS-level backstop: refuse to run ANY stage when free disk on
+        the data dir is below disk.hard_min_free_gb.
+
+        The download stage has its own finer guard
+        (download.min_free_disk_gb) that only protects tmp_downloads;
+        staging/, batch_build/, review/ and logs are otherwise unguarded
+        -- so a stalled Drive upload (quota/auth/storage-full) would let
+        those dirs fill the disk until every process, sshd included,
+        wedges in D-state and the VM becomes unreachable. This check
+        turns that cascade into a visible, recoverable pause."""
+        free = free_gb(self.cfg.path("paths", "data_dir"))
+        hard_min = float(self.cfg.raw.get("disk", {}).get("hard_min_free_gb", 2))
+        if free < hard_min:
+            print(f"[{time.strftime('%H:%M:%S')}] WARNING: free disk {free:.1f}GB below "
+                  f"{hard_min:.0f}GB hard floor -- pausing all stages. Check Drive "
+                  f"uploads (rclone about gdrive:) and review/ dir.", flush=True)
+            return False
+        return True
+
+    def _reclaim_disk(self) -> None:
+        """Cheap, safe disk reclamation before each download cycle:
+        stale *.part files, orphaned final payloads (a crash between
+        os.replace and the status update leaves a sha256.* file with no
+        live url row), and old rotated logs. Payloads referenced by a
+        live registry row are never touched here."""
+        max_age = float(self.cfg.raw.get("disk", {}).get("reclaim_max_age_h", 24)) * 3600
+        cutoff = time.time() - max_age
+        reclaimed = 0
+        tmp = self.cfg.path("paths", "download_tmp_dir")
+        if tmp.is_dir():
+            live = set()
+            try:
+                live = {r[0] for r in self._counts_conn().execute(
+                    "SELECT sha256 FROM urls WHERE status IN "
+                    "('downloaded','downloading','classified') AND sha256 IS NOT NULL")}
+            except sqlite3.Error:
+                pass
+            for p in tmp.iterdir():
+                try:
+                    if p.stat().st_mtime >= cutoff:
+                        continue
+                    if p.suffix == ".part":
+                        p.unlink()
+                        reclaimed += 1
+                    elif live and p.name.split(".", 1)[0] not in live:
+                        # final payload whose url row left the live set
+                        p.unlink()
+                        reclaimed += 1
+                except OSError:
+                    pass
+        logs = self.cfg.path("paths", "logs_dir")
+        if logs.is_dir():
+            def _is_rotated(p: Path) -> bool:
+                # RotatingFileHandler names: base.jsonl.1, .2, ... or .gz
+                return p.suffix == ".gz" or (
+                    len(p.suffix) > 1 and p.suffix[1:].isdigit())
+            rotated = sorted((p for p in logs.iterdir() if _is_rotated(p)),
+                             key=lambda p: p.stat().st_mtime)
+            # drop old rotated logs beyond the 5 newest, age-gated
+            for p in rotated[:-5]:
+                try:
+                    if p.stat().st_mtime < cutoff:
+                        p.unlink()
+                        reclaimed += 1
+                except OSError:
+                    pass
+        if reclaimed:
+            print(f"[{time.strftime('%H:%M:%S')}] reclaimed {reclaimed} stale "
+                  f"file(s) to free disk space", flush=True)
+
+    def _counts_conn(self) -> sqlite3.Connection:
+        return sqlite3.connect(str(self.db_path), timeout=5)
+
     def _stage(self, name: str, *args: str) -> int:
         """Run one CLI stage as a child process; output goes to its log file."""
         if self.stop.is_set():
@@ -128,6 +203,15 @@ class Orchestrator:
 
     def download_loop(self) -> None:
         while not self.stop.is_set():
+            self._reclaim_disk()
+            if not self._disk_ok():
+                # hard floor: stop PRODUCING so the disk can never fill.
+                # deliver_loop is deliberately NOT gated -- classify's
+                # review-prune and package's upload-and-delete are the only
+                # mechanisms that FREE disk, and gating them would deadlock
+                # recovery (disk low -> nothing drains -> disk stays low).
+                self._sleep(300)
+                continue
             self._stage("filter", "filter")
             code = self._stage("download", "download")
             self._sleep(120 if code == 0 else 300)
