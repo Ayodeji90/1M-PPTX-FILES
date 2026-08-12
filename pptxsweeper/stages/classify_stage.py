@@ -182,6 +182,10 @@ class ClassifyStage:
         self.conversion_timeout = int(conv["timeout_s"])
         self.stats = {"deliver": 0, "review": 0, "reject": 0, "errors": 0}
         self._pool = None   # set while _run_workers owns a ProcessPoolExecutor
+        # future -> row for tasks CURRENTLY being computed (bounded by
+        # workers + conversion.max_concurrent). The stall watchdog only
+        # quarantines these -- never the queued-but-untouched files.
+        self._inflight: dict = {}
         self.file_timeout_s = int(self.cfg.raw.get("classify", {})
                                   .get("file_timeout_s", 0))
         # Stall watchdog: if a classify pass makes NO progress for this
@@ -213,7 +217,6 @@ class ClassifyStage:
         self._done = threading.Event()
         self._last_progress = time.monotonic()
         self._remaining = len(rows)
-        self._run_row_ids = [r["id"] for r in rows]
         if self.watchdog_stall_min:
             threading.Thread(target=self._watchdog, daemon=True).start()
         try:
@@ -293,13 +296,17 @@ class ClassifyStage:
                     for (row, task), result in zip(
                             conv_pairs,
                             cpool.map(self._parent_convert, (t for _, t in conv_pairs))):
+                        self._inflight = {0: row}   # current conversion in flight
                         if result.get("reject"):
                             self._persist_safe(row, result)
                         else:
                             converted.append((row, result))
+                        self._last_progress = time.monotonic()
+                        self._remaining -= 1
             ordered = native_pairs + converted
             for (row, _), result in zip(ordered,
                                         map(_compute_task, (t for _, t in ordered))):
+                self._inflight = {0: row}   # current compute in flight
                 self._persist_safe(row, result)
                 self._last_progress = time.monotonic()
                 self._remaining -= 1
@@ -307,31 +314,76 @@ class ClassifyStage:
             with ProcessPoolExecutor(max_workers=workers) as pool, \
                     ThreadPoolExecutor(max_workers=conv_max) as cpool:
                 self._pool = pool   # so the watchdog can kill the workers
-                pending: dict = {}        # classify future -> row
-                conversions: dict = {}    # convert future -> (row, task)
-                for row, task in native_pairs:
-                    pending[pool.submit(_compute_task, task)] = row
-                for row, task in conv_pairs:
-                    conversions[cpool.submit(self._parent_convert, task)] = (row, task)
-                while pending or conversions:
+                pending: dict = {}        # IN-FLIGHT classify future -> row
+                conversions: dict = {}    # IN-FLIGHT convert future -> (row, task)
+                # Bounded submission: only `workers` pool tasks + conv_max
+                # conversions are in flight at any moment; the rest wait in
+                # the queues. This is what lets the stall watchdog
+                # quarantine EXACTLY the pathological files (the in-flight
+                # ones) instead of destroying the whole chunk -- files that
+                # merely sat queued behind a hung task are innocent and
+                # must survive for the next run.
+                native_q: list = list(native_pairs)
+                conv_q: list = list(conv_pairs)
+                converted_q: list = []   # converted -> join the pool
+
+                def _fill_pool() -> None:
+                    while native_q and len(pending) < workers:
+                        row, task = native_q.pop(0)
+                        fut = pool.submit(_compute_task, task)
+                        pending[fut] = row
+                        self._inflight[fut] = row
+
+                def _fill_conv() -> None:
+                    while conv_q and len(conversions) < conv_max:
+                        row, task = conv_q.pop(0)
+                        fut = cpool.submit(self._parent_convert, task)
+                        conversions[fut] = (row, task)
+                        self._inflight[fut] = row
+
+                _fill_pool()
+                _fill_conv()
+                while pending or conversions or native_q or conv_q or converted_q:
+                    if not pending and not conversions:
+                        # everything still queued must first produce work:
+                        # converted results join the pool before new natives
+                        if converted_q:
+                            row, result = converted_q.pop(0)
+                            fut = pool.submit(_compute_task, result)
+                            pending[fut] = row
+                            self._inflight[fut] = row
+                        else:
+                            _fill_pool()
+                            _fill_conv()
+                        continue
                     done, _ = wait([*pending.keys(), *conversions.keys()],
                                    return_when=FIRST_COMPLETED)
                     for fut in done:
                         if fut in conversions:
                             row, _task = conversions.pop(fut)
+                            self._inflight.pop(fut, None)
                             result = fut.result()
                             if result.get("reject"):
                                 self._persist_safe(row, result)
                             else:
                                 # converted file joins the pool right away
-                                pending[pool.submit(_compute_task, result)] = row
+                                converted_q.append((row, result))
                             self._last_progress = time.monotonic()
                             self._remaining -= 1
                         else:
                             row = pending.pop(fut)
+                            self._inflight.pop(fut, None)
                             self._persist_safe(row, fut.result())
                             self._last_progress = time.monotonic()
                             self._remaining -= 1
+                        # refill the slot we just freed
+                        if converted_q and len(pending) < workers:
+                            row, result = converted_q.pop(0)
+                            fut = pool.submit(_compute_task, result)
+                            pending[fut] = row
+                            self._inflight[fut] = row
+                        _fill_pool()
+                        _fill_conv()
         log.info("classify done (%d workers): %s", workers, self.stats)
         return self.stats
 
@@ -378,21 +430,17 @@ class ClassifyStage:
             log.exception("failed to kill classify pool workers")
 
     def _quarantine_inflight(self) -> None:
-        """Mark every row from THIS run that is still 'downloaded' as
-        rejected and delete its payload -- those are the files that wedged
-        the run (persisted rows have already left 'downloaded', so they
-        are never touched). Without this the watchdog converts a permanent
-        wedge into an endless restart loop."""
-        ids = getattr(self, "_run_row_ids", None) or []
-        if not ids:
+        """Reject ONLY the files that were in-flight (being computed by a
+        worker or converted in the parent) when the run stalled -- at most
+        `workers` + `conversion.max_concurrent` files. Everything still
+        queued is innocent and survives for the next run. Without this the
+        watchdog would reject the whole chunk, destroying good files that
+        merely sat behind the pathological one(s)."""
+        rows = list(self._inflight.values())
+        if not rows:
             return
-        placeholders = ",".join("?" * len(ids))
-        rows = self.reg.conn.execute(
-            f"SELECT id, metadata FROM urls WHERE id IN ({placeholders}) "
-            "AND status='downloaded'", ids).fetchall()
         pruned = 0
-        for r in rows:
-            row = dict(r)
+        for row in rows:
             try:
                 payload = self._payload_path(row)
                 if payload:
@@ -401,10 +449,11 @@ class ClassifyStage:
                                     reject_reason="classify_watchdog_timeout")
                 pruned += 1
             except Exception:
-                log.exception("quarantine failed for url id %s", row["id"])
+                log.exception("quarantine failed for url id %s", row.get("id"))
         if pruned:
-            log.error("QUARANTINED %d pathological file(s) that wedged "
-                      "classify (payloads deleted, rows rejected)", pruned)
+            log.error("QUARANTINED %d in-flight pathological file(s) that "
+                      "wedged classify (payloads deleted, rows rejected)",
+                      pruned)
 
     def _parent_convert(self, task: dict) -> dict:
         """Convert a legacy .ppt in this (parent) process. Runs inside the

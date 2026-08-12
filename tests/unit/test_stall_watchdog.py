@@ -76,32 +76,40 @@ def test_config_prefers_watchdog_stall_min(tmp_path):
     reg.close()
 
 
-def test_quarantine_only_touches_still_downloaded(tmp_path, registry):
-    """Rows still 'downloaded' are rejected + payload deleted; rows that
-    already left 'downloaded' (already persisted) are never touched."""
+def _row_dict(registry, url_id: int) -> dict:
+    r = registry.conn.execute("SELECT * FROM urls WHERE id=?",
+                              (url_id,)).fetchone()
+    return dict(r)
+
+
+def test_quarantine_only_touches_inflight(tmp_path, registry):
+    """ONLY the rows tracked as in-flight are rejected + payload deleted;
+    queued/untouched rows (never in _inflight) survive intact. This is the
+    fix for the watchdog destroying the whole chunk when only 1-2 files
+    were actually pathological."""
     wedged = tmp_path / "wedged.pptx"
     wedged.write_bytes(b"x" * 10)
-    done = tmp_path / "done.pptx"
-    done.write_bytes(b"y" * 10)
+    queued = tmp_path / "queued.pptx"
+    queued.write_bytes(b"y" * 10)
 
     wid = _insert_url(registry, "https://example.com/wedged.pptx",
                       "downloaded", str(wedged))
-    did = _insert_url(registry, "https://example.com/done.pptx",
-                      "classified", str(done))  # already persisted -> untouched
+    qid = _insert_url(registry, "https://example.com/queued.pptx",
+                      "downloaded", str(queued))  # not in flight -> untouched
 
     stage = _make_stage(tmp_path, registry, 0)
-    stage._run_row_ids = [wid, did]
+    stage._inflight = {0: _row_dict(registry, wid)}  # only the wedged one
     stage._quarantine_inflight()
 
-    assert not wedged.exists(), "wedged payload must be deleted"
-    assert done.exists(), "already-classified payload must survive"
+    assert not wedged.exists(), "in-flight payload must be deleted"
+    assert queued.exists(), "queued payload must survive"
     row_w = registry.conn.execute(
         "SELECT status, reject_reason FROM urls WHERE id=?", (wid,)).fetchone()
     assert row_w["status"] == "rejected"
     assert row_w["reject_reason"] == "classify_watchdog_timeout"
-    row_d = registry.conn.execute(
-        "SELECT status FROM urls WHERE id=?", (did,)).fetchone()
-    assert row_d["status"] == "classified"
+    row_q = registry.conn.execute(
+        "SELECT status FROM urls WHERE id=?", (qid,)).fetchone()
+    assert row_q["status"] == "downloaded"  # innocent queued file untouched
 
 
 def test_watchdog_fires_after_stall_and_quarantines(tmp_path, registry,
@@ -118,7 +126,7 @@ def test_watchdog_fires_after_stall_and_quarantines(tmp_path, registry,
     stage._done = threading.Event()  # not set -> keeps watching
     stage._last_progress = time.monotonic() - 600  # no progress for 10 min
     stage._remaining = 1
-    stage._run_row_ids = [wid]
+    stage._inflight = {0: _row_dict(registry, wid)}
 
     # Don't actually die: raise instead so the test can assert the order.
     monkeypatch.setattr(os, "_exit", lambda code: (_ for _ in ()).throw(
