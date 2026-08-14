@@ -363,7 +363,8 @@ class DownloadStage:
             try:
                 rows = await self.writer.call(
                     self.reg.claim_urls, [domain], self.claim_batch_size,
-                    self.handoff_first
+                    from_status="discovered", to_status="downloading",
+                    handoff_first=self.handoff_first,
                 )
                 if not rows:
                     # Domain exhausted: drop it (don't requeue), and forget

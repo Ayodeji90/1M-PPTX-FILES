@@ -118,7 +118,7 @@ class Registry:
 
     def claim_urls(self, domains: Sequence[str], limit: int,
                    from_status: str = "discovered", to_status: str = "downloading",
-                   handoff_first: bool = False) -> list[sqlite3.Row]:
+                   *, handoff_first: bool = False) -> list[sqlite3.Row]:
         """Atomically claim up to `limit` URLs whose domain is in `domains`.
 
         Uses UPDATE ... RETURNING so concurrent claimers can't double-claim.

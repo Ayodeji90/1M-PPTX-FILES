@@ -55,6 +55,19 @@ def test_import_tags_handoff_rows(registry, tmp_path):
     assert '"handoff": true' in row["metadata"]        # tagged
 
 
+def test_handoff_first_positional_bool_claims_nothing(registry):
+    """Regression: the download worker passed handoff_first as a positional
+    arg, which landed in from_status (status=True matches no TEXT status)
+    and silently claimed nothing. The gate must only be triggered via the
+    keyword -- this documents why the call site uses named arguments."""
+    _seed(registry, 5, "wayback_cdx", handoff=True)
+    # positional bool in the from_status slot -> matches nothing
+    assert registry.claim_urls(["example.org"], 10, True) == []
+    # keyword -> gate engages and handoff rows are claimed
+    claimed = registry.claim_urls(["example.org"], 10, handoff_first=True)
+    assert len(claimed) == 5
+
+
 def test_handoff_first_claims_only_handoff_while_pending(registry):
     _seed(registry, 5, "wayback_cdx", handoff=True)
     _seed(registry, 5, "ocw:mit.edu", domain="mit.edu")
