@@ -53,6 +53,7 @@ class PackageStage:
             bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=cfg.rclone_root_folder(),
             retries=int(cfg.raw["upload"]["max_retries"]),
             retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]),
+            timeout=int(rc.get("timeout_s", 900)),
         )
         self.verify_method = rc["verify_method"]
         self.batch_size = int(cfg.raw["batch"]["size"])

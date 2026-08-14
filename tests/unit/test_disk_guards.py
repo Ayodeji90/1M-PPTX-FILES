@@ -153,3 +153,26 @@ def test_reclaim_deletes_orphaned_payloads_keeps_live(tmp_path, registry):
     orch._reclaim_disk()
     assert not orphan.exists()   # sha not in any live url row -> reclaimed
     assert live.exists()         # sha still owned by a 'downloaded' row
+
+
+def test_reclaim_sweeps_stale_soffice_tmp_keeps_fresh(tmp_path, monkeypatch):
+    # Killed/crashed LibreOffice conversions leak lu*.tmp dirs into the
+    # system temp dir; they must be swept so they can't eat the download
+    # disk floor and pause the pipeline. Fresh ones are left alone.
+    import tempfile as _tmpmod
+    orch = _mk_orch(tmp_path)
+    (tmp_path / "tmp_downloads").mkdir()
+    (tmp_path / "logs").mkdir()
+    sys_tmp = tmp_path / "sys_tmp"
+    sys_tmp.mkdir()
+    old = time.time() - 48 * 3600
+    stale_dir = sys_tmp / "lu1111abc.tmp"
+    stale_dir.mkdir()
+    (stale_dir / "scratch").write_bytes(b"y")
+    os.utime(stale_dir, (old, old))
+    fresh_dir = sys_tmp / "lu9999def.tmp"
+    fresh_dir.mkdir()
+    monkeypatch.setattr(_tmpmod, "gettempdir", lambda: str(sys_tmp))
+    orch._reclaim_disk()
+    assert not stale_dir.exists()   # old lu*.tmp swept
+    assert fresh_dir.exists()       # recent lu*.tmp kept

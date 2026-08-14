@@ -15,12 +15,15 @@ one-line progress summary every minute.
 """
 from __future__ import annotations
 
+import shutil
 import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 from .config import Config
 from .node import NodeIdentity
@@ -146,6 +149,25 @@ class Orchestrator:
                         reclaimed += 1
                 except OSError:
                     pass
+        # LibreOffice scratch dirs (lu*.tmp) leaked into the system temp
+        # dir by killed/crashed conversions. convert/ now redirects TMPDIR
+        # into a per-call dir, but pre-fix runs -- and anything that
+        # bypasses that path -- leave lu*.tmp here; sweep them so they
+        # can't eat the download disk floor and pause the pipeline again.
+        try:
+            for p in Path(tempfile.gettempdir()).glob("lu*.tmp"):
+                try:
+                    if p.stat().st_mtime >= cutoff:
+                        continue
+                    if p.is_dir():
+                        shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        p.unlink()
+                    reclaimed += 1
+                except OSError:
+                    pass
+        except OSError:
+            pass
         logs = self.cfg.path("paths", "logs_dir")
         if logs.is_dir():
             def _is_rotated(p: Path) -> bool:
@@ -325,7 +347,8 @@ def preflight(cfg: Config) -> Rclone | None:
     """Verify Google Drive is reachable and create the delivery folder."""
     rc_cfg = cfg.raw["rclone"]
     rclone = Rclone(bin=rc_cfg["bin"], remote=cfg.rclone_remote(),
-                    root_folder=cfg.rclone_root_folder())
+                    root_folder=cfg.rclone_root_folder(),
+                    timeout=int(rc_cfg.get("timeout_s", 900)))
     if not rclone.available():
         print("ERROR: rclone is not installed. Install it:  sudo apt install rclone")
         return None

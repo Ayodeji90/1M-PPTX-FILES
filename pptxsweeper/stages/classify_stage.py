@@ -677,10 +677,16 @@ class ClassifyStage:
         be able to fill the boot disk and wedge the OS."""
         review_folder = self.cfg.raw["rclone"]["review_folder"]
         hard_min = float(self.cfg.raw.get("disk", {}).get("hard_min_free_gb", 2))
-        sync_timeout = int(self.cfg.raw.get("rclone", {}).get("review_sync_timeout_s", 300))
+        # Review sync is best-effort and re-runs every classify pass, so a
+        # stalled Drive connection must FAIL FAST (single attempt, short
+        # budget) instead of blocking the deliver loop for minutes. On
+        # failure we keep local payloads and try again next pass.
+        sync_timeout = int(self.cfg.raw.get("rclone", {})
+                           .get("review_sync_timeout_s", 300))
         self._write_review_sidecars()
-        rclone.mkdir(review_folder)
-        rclone.copy_dir(self.review_dir, review_folder, timeout=sync_timeout)
+        rclone.mkdir(review_folder, timeout=sync_timeout, retry=False)
+        rclone.copy_dir(self.review_dir, review_folder,
+                        timeout=sync_timeout, retry=False)
         if not rclone.check(self.review_dir, review_folder,
                             method=self.cfg.raw["rclone"]["verify_method"],
                             timeout=sync_timeout):

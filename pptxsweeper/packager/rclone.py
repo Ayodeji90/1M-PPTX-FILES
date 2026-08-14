@@ -46,12 +46,27 @@ class Rclone:
 
     def _run(self, args: list[str], retry: bool = True,
              timeout: int | None = None) -> subprocess.CompletedProcess:
-        timeout = timeout or self.timeout
+        if timeout is None:
+            timeout = self.timeout
         cmd = [self.bin, *args]
         attempts = self.retries if retry else 1
         last: subprocess.CompletedProcess | None = None
+        timed_out = False
         for attempt in range(attempts):
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Stalled Drive connection: rclone can sit on an open-but-
+                # idle socket indefinitely. Fail this attempt and retry with
+                # backoff; after the last attempt raise RcloneError so the
+                # caller can move on instead of blocking for hours.
+                timed_out = True
+                log.warning("rclone attempt %d/%d timed out after %ds: %s",
+                            attempt + 1, attempts, timeout, " ".join(cmd))
+                if attempt < attempts - 1:
+                    time.sleep(self.retry_backoff_s[min(attempt, len(self.retry_backoff_s) - 1)])
+                continue
+            timed_out = False
             if proc.returncode == 0:
                 return proc
             last = proc
@@ -59,6 +74,8 @@ class Rclone:
                         proc.stderr.strip()[-500:])
             if attempt < attempts - 1:
                 time.sleep(self.retry_backoff_s[min(attempt, len(self.retry_backoff_s) - 1)])
+        if timed_out:
+            raise RcloneError(cmd, -1, f"rclone timed out after {timeout}s")
         assert last is not None
         raise RcloneError(cmd, last.returncode, last.stderr)
 
@@ -78,8 +95,9 @@ class Rclone:
             return False
         return f"{self.remote}:" in proc.stdout.split()
 
-    def mkdir(self, *parts: str) -> None:
-        self._run(["mkdir", self.remote_path(*parts)])
+    def mkdir(self, *parts: str, timeout: int | None = None,
+              retry: bool = True) -> None:
+        self._run(["mkdir", self.remote_path(*parts)], retry=retry, timeout=timeout)
 
     def copy_file(self, local: Path, *remote_parts: str,
                   dest_name: str | None = None) -> None:
@@ -97,12 +115,13 @@ class Rclone:
         return entries[0] if entries else None
 
     def copy_dir(self, local_dir: Path, *remote_parts: str,
-                 bwlimit: str | None = None, timeout: int | None = None) -> None:
+                 bwlimit: str | None = None, timeout: int | None = None,
+                 retry: bool = True) -> None:
         args = ["copy", str(local_dir), self.remote_path(*remote_parts),
                 "--transfers", "8", "--checkers", "16"]
         if bwlimit:
             args += ["--bwlimit", bwlimit]
-        self._run(args, timeout=timeout)
+        self._run(args, retry=retry, timeout=timeout)
 
     def check(self, local_dir: Path, *remote_parts: str, method: str = "size-only",
               timeout: int | None = None) -> bool:
