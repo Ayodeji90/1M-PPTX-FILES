@@ -135,16 +135,20 @@ class Registry:
         placeholders = ",".join("?" for _ in domains)
         now = utcnow()
 
+        # Handoff rows carry metadata.handoff=true (stages/handoff.py sets
+        # it on import) so the gate works even though the original
+        # discovery_source is preserved for filter_stage's pre-verified
+        # format check.
         gate = ""
         if handoff_first:
             gate = (
                 "-- consumer node: keep own harvest on standby until the\n"
                 "-- handed-off queue is drained\n"
                 "AND (NOT EXISTS (SELECT 1 FROM urls "
-                "WHERE status=? AND discovery_source='handoff')\n"
-                "     OR discovery_source='handoff')\n"
+                "WHERE status=? AND json_extract(metadata, '$.handoff') = 1)\n"
+                "     OR json_extract(metadata, '$.handoff') = 1)\n"
             )
-        order = ("CASE WHEN discovery_source='handoff' THEN 0 "
+        order = ("CASE WHEN json_extract(metadata, '$.handoff') = 1 THEN 0 "
                  "WHEN discovery_source LIKE 'wayback%' THEN 1 ELSE 2 END")
         if not handoff_first:
             order = ("CASE WHEN discovery_source LIKE 'wayback%' THEN 1 ELSE 0 END")

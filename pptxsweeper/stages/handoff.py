@@ -82,6 +82,11 @@ def import_urls(reg: Registry, in_path: str | Path) -> dict:
                 meta = json.loads(row.get("metadata") or "{}")
             except (ValueError, TypeError):
                 meta = {}
+            # Tag as handoff so the consumer's download gate (handoff_first)
+            # can keep its OWN harvest on standby until this queue drains.
+            # The original discovery_source is preserved (filter_stage's
+            # pre-verified-format check depends on govdata/standards:..).
+            meta["handoff"] = True
             candidates.append({
                 "url": url,
                 "domain": (row.get("domain") or "").strip(),
