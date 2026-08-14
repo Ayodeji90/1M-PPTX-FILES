@@ -142,6 +142,37 @@ def test_watchdog_fires_after_stall_and_quarantines(tmp_path, registry,
     assert status == "rejected"
 
 
+def test_reject_file_and_reject_inflight(tmp_path, registry):
+    """Worker-exception recovery helpers: _reject_file deletes the payload
+    and marks the row rejected (so a pathological file can never wedge the
+    deliver chain on every re-run); _reject_inflight rejects exactly the
+    tracked in-flight rows and clears them."""
+    lost = tmp_path / "lost.pptx"
+    lost.write_bytes(b"k" * 10)
+    lid = _insert_url(registry, "https://example.com/lost.pptx",
+                      "downloaded", str(lost))
+    stage = _make_stage(tmp_path, registry, 0)
+    stage._reject_file(_row_dict(registry, lid), "classify_worker_error")
+    assert not lost.exists(), "failed-worker payload must be deleted"
+    row = registry.conn.execute(
+        "SELECT status, reject_reason FROM urls WHERE id=?", (lid,)).fetchone()
+    assert row["status"] == "rejected"
+    assert row["reject_reason"] == "classify_worker_error"
+
+    p2 = tmp_path / "inflight.pptx"
+    p2.write_bytes(b"m" * 10)
+    pid = _insert_url(registry, "https://example.com/inflight.pptx",
+                      "downloaded", str(p2))
+    stage._inflight = {0: _row_dict(registry, pid)}
+    assert stage._reject_inflight("classify_worker_pool_crash") == 1
+    assert not p2.exists()
+    assert stage._inflight == {}
+    row2 = registry.conn.execute(
+        "SELECT status, reject_reason FROM urls WHERE id=?", (pid,)).fetchone()
+    assert row2["status"] == "rejected"
+    assert row2["reject_reason"] == "classify_worker_pool_crash"
+
+
 def test_watchdog_stays_silent_while_progressing(tmp_path, registry,
                                                  monkeypatch):
     """Progress resets the stall clock: a slow-but-working run never

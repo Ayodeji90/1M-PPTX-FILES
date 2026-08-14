@@ -273,6 +273,18 @@ class Registry:
     def file_by_sha256(self, sha256: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM files WHERE sha256=?", (sha256,)).fetchone()
 
+    def file_is_duplicate(self, sha256: str, url_id: int) -> bool:
+        """True if this hash is a GENUINE duplicate: already delivered, or
+        owned by a DIFFERENT url. A files row for the SAME url that was
+        never delivered (its payload was lost before delivery) is NOT a
+        duplicate -- the re-download is exactly how that file recovers."""
+        row = self.conn.execute(
+            "SELECT url_id, delivered_at FROM files WHERE sha256=?", (sha256,)
+        ).fetchone()
+        if row is None:
+            return False
+        return row["url_id"] != url_id or row["delivered_at"] is not None
+
     # ------------------------------------------------------------------
     # Domains
     # ------------------------------------------------------------------

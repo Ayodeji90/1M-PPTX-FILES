@@ -64,6 +64,13 @@ def _validate_pptx(path: Path) -> ValidationResult:
         return ValidationResult(False, reason=f"bad zip: {exc}")
     except OSError as exc:
         return ValidationResult(False, reason=f"io error: {exc}")
+    except Exception as exc:
+        # Corrupt/truncated zips surface as zlib.error (e.g. "invalid
+        # stored block lengths"), struct.error, EOFError, etc. during
+        # testzip()/read(). These must REJECT the file, never propagate:
+        # a single corrupt deck previously crashed the classify worker
+        # (BrokenProcessPool) and took the whole deliver chain down.
+        return ValidationResult(False, reason=f"corrupt zip: {exc}")
 
 
 def _validate_pdf(path: Path) -> ValidationResult:

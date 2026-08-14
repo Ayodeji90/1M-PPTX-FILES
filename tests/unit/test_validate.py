@@ -37,6 +37,28 @@ def test_corrupt_zip_rejected(tmp_path):
     assert not result.ok
 
 
+def test_zlib_error_in_testzip_rejected_not_raised(tmp_path, monkeypatch):
+    """THE production crash: a truncated zip raises zlib.error inside
+    testzip() ('invalid stored block lengths'). validate_payload must turn
+    that into a REJECT, never propagate it -- it previously escaped
+    _validate_pptx, crashed the classify worker, and silently stopped all
+    Drive uploads."""
+    import zipfile
+    import zlib
+
+    p = tmp_path / "zliberr.pptx"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr("ppt/presentation.xml", "<p:presentation/>")
+
+    def _boom(*_a, **_k):
+        raise zlib.error("Error -3 while decompressing data: invalid stored block lengths")
+
+    monkeypatch.setattr(zipfile.ZipFile, "testzip", _boom)
+    result = validate_payload(p)
+    assert not result.ok
+    assert "corrupt zip" in result.reason
+
+
 def test_docx_masquerading_as_pptx_rejected(tmp_path):
     import zipfile
     p = tmp_path / "really_a_docx.pptx"

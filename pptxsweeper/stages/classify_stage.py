@@ -23,6 +23,7 @@ import threading
 import time
 from concurrent.futures import (FIRST_COMPLETED, ProcessPoolExecutor,
                                 ThreadPoolExecutor, wait)
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 from ..compliance.screens import run_screens
@@ -234,9 +235,12 @@ class ClassifyStage:
         for r in rows:
             row = dict(r)
             # Same content downloaded via two URLs (parallel-download race
-            # or prior run): only the first row owns the payload.
+            # or prior run): only the first row owns the payload. A files
+            # row for the SAME url that was never delivered (payload lost
+            # before delivery) is NOT a duplicate -- let it re-classify so
+            # it can be re-delivered (file_is_duplicate).
             sha = row.get("sha256")
-            if sha and (sha in seen_shas or self.reg.file_by_sha256(sha)):
+            if sha and (sha in seen_shas or self.reg.file_is_duplicate(sha, row["id"])):
                 self.reg.update_url(row["id"], status="duplicate")
                 continue
             if sha:
@@ -373,7 +377,31 @@ class ClassifyStage:
                         else:
                             row = pending.pop(fut)
                             self._inflight.pop(fut, None)
-                            self._persist_safe(row, fut.result())
+                            try:
+                                result = fut.result()
+                            except BrokenProcessPool:
+                                # A worker process died outright (segfault /
+                                # OOM / SIGKILL): the pool is unusable and
+                                # pending futures can never complete. Reject
+                                # the in-flight files and force-exit so the
+                                # orchestrator re-runs cleanly (same recovery
+                                # as the stall watchdog; queued-but-untouched
+                                # files stay 'downloaded' for the next run).
+                                log.error("classify worker pool died; "
+                                          "rejecting %d in-flight file(s)",
+                                          len(self._inflight))
+                                self._reject_inflight("classify_worker_pool_crash")
+                                os._exit(1)
+                            except Exception:
+                                # Uncaught worker exception (e.g. a corrupt
+                                # deck raising outside validate): reject this
+                                # ONE file and keep going -- the pool is still
+                                # healthy, so the rest of the chunk proceeds.
+                                log.exception("classify worker failed on url id %s; "
+                                              "rejecting file", row["id"])
+                                self._reject_file(row, "classify_worker_error")
+                            else:
+                                self._persist_safe(row, result)
                             self._last_progress = time.monotonic()
                             self._remaining -= 1
                         # refill the slot we just freed
@@ -454,6 +482,33 @@ class ClassifyStage:
             log.error("QUARANTINED %d in-flight pathological file(s) that "
                       "wedged classify (payloads deleted, rows rejected)",
                       pruned)
+
+    def _reject_file(self, row: dict, reason: str) -> None:
+        """Terminal-reject one file whose worker failed unexpectedly (an
+        uncaught exception, not a hang). Payload is deleted and the row ends
+        rejected, so a pathological file can never wedge the deliver chain
+        on every re-run the way a crash did."""
+        try:
+            payload = self._payload_path(row)
+            if payload:
+                payload.unlink(missing_ok=True)
+            self.reg.update_url(row["id"], status="rejected",
+                                reject_reason=reason[:300])
+            self.stats["reject"] += 1
+        except Exception:
+            log.exception("failed to reject url id %s after worker failure",
+                          row.get("id"))
+
+    def _reject_inflight(self, reason: str) -> int:
+        """Reject every file currently being computed (at most workers +
+        conversion.max_concurrent) when the worker pool itself died. Queued-
+        but-untouched files survive intact for the next run -- mirroring the
+        stall watchdog's 'only the in-flight files are pathological' rule."""
+        rows = list(self._inflight.values())
+        for row in rows:
+            self._reject_file(row, reason)
+        self._inflight.clear()
+        return len(rows)
 
     def _parent_convert(self, task: dict) -> dict:
         """Convert a legacy .ppt in this (parent) process. Runs inside the

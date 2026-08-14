@@ -195,6 +195,43 @@ def test_config_override_missing_raises(tmp_path, monkeypatch):
         Config.load(start=tmp_path)
 
 
+# --- requeue-after-lost-payload recovery ---------------------------------
+def test_file_is_duplicate_recovery_semantics(registry):
+    """A files row for the SAME url that was never delivered must NOT be a
+    duplicate -- the requeue-after-lost-payload recovery depends on it.
+    The old check (file_by_sha256 is not None) marked the re-download
+    'duplicate' and stranded the file forever; a different url or a
+    delivered row is still a genuine duplicate."""
+    from pptxsweeper.db.dao import utcnow
+
+    sha = "b" * 64
+    with registry.tx():
+        registry.conn.execute(
+            "INSERT INTO urls (url, domain, tier, discovery_source, status, sha256) "
+            "VALUES (?,?,?,?,?,?)",
+            ("https://a.example/x.pptx", "a.example", 1, "t", "downloaded", sha))
+        registry.conn.execute(
+            "INSERT INTO urls (url, domain, tier, discovery_source, status, sha256) "
+            "VALUES (?,?,?,?,?,?)",
+            ("https://b.example/y.pptx", "b.example", 1, "t", "downloaded", sha))
+        a = registry.conn.execute(
+            "SELECT id FROM urls WHERE domain='a.example'").fetchone()[0]
+        b = registry.conn.execute(
+            "SELECT id FROM urls WHERE domain='b.example'").fetchone()[0]
+        cur = registry.conn.execute(
+            "INSERT INTO files (url_id, sha256, decision, quality) VALUES (?,?,?,?)",
+            (a, sha, "DELIVER", "HIGH"))
+        fid = cur.lastrowid
+
+    # same url, never delivered -> NOT a duplicate (re-download recovers it)
+    assert registry.file_is_duplicate(sha, a) is False
+    # a DIFFERENT url holding the same hash -> genuine duplicate
+    assert registry.file_is_duplicate(sha, b) is True
+    # once delivered, even the same url is a duplicate
+    registry.update_file(fid, delivered_at=utcnow())
+    assert registry.file_is_duplicate(sha, a) is True
+
+
 # --- harvester / filter fixes (found live on the VM) ----------------------
 def test_govdata_relative_resource_urls_absolutized():
     """open.canada.ca returns path-only resource URLs; they must be

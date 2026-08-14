@@ -608,14 +608,17 @@ class DownloadStage:
         origin_of_hash = await self.writer.call(self.reg.known_hash_origin, sha256)
         if origin_of_hash == "pipeline":
             # Hash seen by this pipeline before: only a duplicate if some
-            # OTHER url or a files row owns it -- otherwise this is the
-            # same URL re-downloaded after a crash lost its status update.
+            # OTHER url owns it or the existing files row is already
+            # delivered -- otherwise this is the same URL re-downloaded
+            # after a crash/lost-payload, and the re-download is how it
+            # recovers (file_is_duplicate lets an undelivered same-url row
+            # through so it can be re-delivered instead of stranded).
             is_dup = (await self.writer.call(self.reg.other_url_with_hash, sha256, url_id)
-                      or await self.writer.call(self.reg.file_by_sha256, sha256) is not None)
+                      or await self.writer.call(self.reg.file_is_duplicate, sha256, url_id))
         elif origin_of_hash is not None:
             is_dup = True    # catalog import / peer node: always a duplicate
         else:
-            is_dup = await self.writer.call(self.reg.file_by_sha256, sha256) is not None
+            is_dup = await self.writer.call(self.reg.file_is_duplicate, sha256, url_id)
         if is_dup:
             part_path.unlink(missing_ok=True)
             self.writer.update_url(url_id, status="duplicate", sha256=sha256,
