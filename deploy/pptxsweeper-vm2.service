@@ -1,9 +1,17 @@
 # PptxSweeper systemd service for the SECOND Azure VM (Standard_D4ads_v7,
-# 4 vCPU / 16 GiB) running as the download-only CONSUMER node.
+# 4 vCPU / 16 GiB) running as the CONSUMER node.
 #
-# It does NO harvesting: it imports a share of VM1's discovered URLs from
-# the shared Drive handoff folder and downloads/validates/delivers them
-# to its own RCLONE_ROOT_FOLDER (PptxSweeper_Delivery_VM2).
+# It imports a share of VM1's discovered URLs from the shared Drive handoff
+# folder AND hunts its own URLs from entirely different sources (tier 5
+# OCW + VM2-only seed sets; see config.vm2.yaml). Its own harvest stays on
+# STANDBY: download.handoff_first keeps the downloader on the handed-off
+# queue until it drains, then it works through VM2's own URLs. Everything
+# is delivered to its own RCLONE_ROOT_FOLDER (PptxSweeper_Delivery_VM2_Azure).
+#
+# Tiers 1,2,3,4,5,7 -- tier 5 (OCW) is a VM2-only source; VM1 runs
+# 1,2,3,4,6,7 so the two machines never harvest the same API or domain.
+# Discovery re-runs every 12h (VM1's default is 24h) since VM2 is the
+# beefier box and is expected to find URLs faster.
 #
 # Install:
 #   sudo cp deploy/pptxsweeper-vm2.service /etc/systemd/system/pptxsweeper.service
@@ -26,7 +34,7 @@ Group=azureuser
 WorkingDirectory=/home/azureuser/1M-PPTX-FILES
 Environment=PPTXSWEEPER_OVERRIDE=config.vm2.yaml
 EnvironmentFile=/home/azureuser/1M-PPTX-FILES/.env
-ExecStart=/home/azureuser/1M-PPTX-FILES/.venv/bin/pptxsweeper run --no-harvest --handoff consumer
+ExecStart=/home/azureuser/1M-PPTX-FILES/.venv/bin/pptxsweeper run --tiers 1,2,3,4,5,7 --harvest-interval-hours 12 --handoff consumer
 Restart=always
 RestartSec=30
 # SIGTERM lets the pipeline finish in-flight work gracefully (download

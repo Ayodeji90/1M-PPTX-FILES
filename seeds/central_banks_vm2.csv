@@ -1,0 +1,14 @@
+name,domain,method
+# VM2's tier-4 monetary-authority seeds -- ENTIRELY DISJOINT from VM1's
+# central_banks.csv (which covers ~100 national central banks). VM2 gets
+# the regional/multinational monetary institutions instead.
+West African Economic and Monetary Union,bceao.int,sitemap
+Bank of Central African States,beac.int,sitemap
+Eastern Caribbean Central Bank,eccb-centralbank.org,sitemap
+Caribbean Development Bank,caribank.org,sitemap
+West African Development Bank,boad.org,sitemap
+Asian Infrastructure Investment Bank,aiib.org,sitemap
+New Development Bank,ndb.int,sitemap
+Arab Monetary Fund,amf.org.ae,sitemap
+European Investment Bank,eib.org,sitemap
+Islamic Development Bank,isdb.org,sitemap

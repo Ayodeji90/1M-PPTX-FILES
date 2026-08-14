@@ -134,6 +134,9 @@ class DownloadStage:
         self._pause_reasons: set[str] = set()
         self.head_before_get = bool(cfg.raw["politeness"]["head_before_get"])
         self.wayback_enabled = bool(dl.get("wayback_fallback", True))
+        # Consumer nodes (fed by another VM's handoff): keep this node's
+        # own harvested URLs on standby until the handed-off queue drains.
+        self.handoff_first = bool(dl.get("handoff_first", False))
         self.tmp_dir = cfg.path("paths", "download_tmp_dir")
         self.stop_event = asyncio.Event()
 
@@ -359,7 +362,8 @@ class DownloadStage:
             self._active_domains += 1
             try:
                 rows = await self.writer.call(
-                    self.reg.claim_urls, [domain], self.claim_batch_size
+                    self.reg.claim_urls, [domain], self.claim_batch_size,
+                    self.handoff_first
                 )
                 if not rows:
                     # Domain exhausted: drop it (don't requeue), and forget

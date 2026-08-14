@@ -102,6 +102,11 @@ download:
   claim_batch_size: 25             # urls claimed per worker per round
   max_attempts: 4                  # per-URL attempts before dead/wayback
   wayback_fallback: true           # archived copy when origin dead/blocked
+  # Consumer nodes fed by another VM's handoff: when true, only claim
+  # handoff-discovered URLs while ANY are pending -- this node's own
+  # harvested URLs stay on standby until the handed-off queue drains.
+  # Off by default (a lone node has no handoff rows, so it's a no-op).
+  handoff_first: false
   # Re-scan the registry this often and enqueue newly discovered domains
   # into the live work queue. Without this a long-running download stage
   # starves every domain harvested after it started (the stage only exits

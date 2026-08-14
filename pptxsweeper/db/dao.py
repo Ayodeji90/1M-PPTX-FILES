@@ -117,18 +117,43 @@ class Registry:
         return with_busy_retry(_do)
 
     def claim_urls(self, domains: Sequence[str], limit: int,
-                   from_status: str = "discovered", to_status: str = "downloading") -> list[sqlite3.Row]:
+                   from_status: str = "discovered", to_status: str = "downloading",
+                   handoff_first: bool = False) -> list[sqlite3.Row]:
         """Atomically claim up to `limit` URLs whose domain is in `domains`.
 
         Uses UPDATE ... RETURNING so concurrent claimers can't double-claim.
         Also picks up parked URLs whose parked_until has passed.
+
+        When `handoff_first` is set (a consumer node fed by another VM's
+        handoff), only rows discovered via the handoff are claimable while
+        ANY handoff row is still pending -- this node's own harvested URLs
+        stay on standby until the handed-off queue is drained, so the two
+        machines never race on the same workload.
         """
         if not domains:
             return []
         placeholders = ",".join("?" for _ in domains)
         now = utcnow()
 
+        gate = ""
+        if handoff_first:
+            gate = (
+                "-- consumer node: keep own harvest on standby until the\n"
+                "-- handed-off queue is drained\n"
+                "AND (NOT EXISTS (SELECT 1 FROM urls "
+                "WHERE status=? AND discovery_source='handoff')\n"
+                "     OR discovery_source='handoff')\n"
+            )
+        order = ("CASE WHEN discovery_source='handoff' THEN 0 "
+                 "WHEN discovery_source LIKE 'wayback%' THEN 1 ELSE 2 END")
+        if not handoff_first:
+            order = ("CASE WHEN discovery_source LIKE 'wayback%' THEN 1 ELSE 0 END")
+
         def _do():
+            params: list = [to_status, now, *domains, from_status, now]
+            if handoff_first:
+                params.append(from_status)   # NOT EXISTS gate status
+            params.append(limit)
             with self.tx():
                 return self.conn.execute(
                     f"""
@@ -137,16 +162,17 @@ class Registry:
                         SELECT id FROM urls
                         WHERE domain IN ({placeholders})
                           AND (status=? OR (status='parked' AND parked_until IS NOT NULL AND parked_until <= ?))
+                        {gate}
                         -- live-origin URLs first: they parallelize across
                         -- hundreds of domains, while wayback-discovered
                         -- (dead-origin) URLs all funnel through the shared
                         -- web.archive.org fetcher (~3 req/s, throttled)
-                        ORDER BY CASE WHEN discovery_source LIKE 'wayback%' THEN 1 ELSE 0 END, id
+                        ORDER BY {order}, id
                         LIMIT ?
                     )
                     RETURNING *
                     """,
-                    (to_status, now, *domains, from_status, now, limit),
+                    tuple(params),
                 ).fetchall()
 
         return with_busy_retry(_do)

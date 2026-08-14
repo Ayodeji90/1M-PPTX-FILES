@@ -1,0 +1,58 @@
+ticker,company,website
+# Tier 2 IR seed list for VM2 -- ENTIRELY DISJOINT from VM1's
+# sp1500_tickers.csv (US universe). VM2 probes the IR pages of these
+# global (non-US) companies for investor-presentation .ppt/.pptx decks.
+# Best-effort: a company with no reachable IR pages simply yields nothing.
+SHEL,Shell plc,shell.com
+BP,BP p.l.c.,bp.com
+GSK,GSK plc,gsk.com
+AZN,AstraZeneca plc,astrazeneca.com
+ULVR,Unilever plc,unilever.com
+RIO,Rio Tinto plc,riotinto.com
+BHP,BHP Group Limited,bhp.com
+HSBA,HSBC Holdings plc,hsbc.com
+VOD,Vodafone Group plc,vodafone.com
+BATS,British American Tobacco plc,bat.com
+DGE,Diageo plc,diageo.com
+RELX,RELX plc,relx.com
+PRU,Prudential plc,prudential.co.uk
+LLOY,Lloyds Banking Group plc,lloydsbankinggroup.com
+BT,BT Group plc,bt.com
+AAL,Anglo American plc,angloamerican.com
+GLEN,Glencore plc,glencore.com
+TSCO,Tesco plc,tesco.com
+SBRY,Sainsbury's plc,sainsburys.co.uk
+SAP,SAP SE,sap.com
+DTE,Deutsche Telekom AG,telekom.com
+ALV,Allianz SE,allianz.com
+BAS,BASF SE,basf.com
+BAYN,Bayer AG,bayer.com
+BMW,BMW AG,bmwgroup.com
+MBG,Mercedes-Benz Group AG,mercedes-benz-group.com
+SIE,Siemens AG,siemens.com
+MUV2,Munich Re,munichre.com
+DHL,Deutsche Post DHL Group,dpdhl.com
+TTE,TotalEnergies SE,totalenergies.com
+MC,LVMH Moet Hennessy,lvmh.com
+OR,L'Oreal SA,loreal.com
+SAN,Sanofi,sanofi.com
+BNP,BNP Paribas,bnpparibas.com
+GLE,Societe Generale,societegenerale.com
+SU,Schneider Electric,se.com
+RI,Pernod Ricard,pernod-ricard.com
+CS,AXA,axa.com
+AI,Air Liquide,airliquide.com
+AC,Accor,accor.com
+NESN,Nestle SA,nestle.com
+NOVN,Novartis AG,novartis.com
+ROG,Roche Holding,roche.com
+ABBN,ABB Ltd,abb.com
+UBSG,UBS Group AG,ubs.com
+ZURN,Zurich Insurance Group,zurich.com
+IFX,Infineon Technologies,infineon.com
+ADS,adidas AG,adidas-group.com
+VOW3,Volkswagen AG,volkswagenag.com
+STLA,Stellantis N.V.,stellantis.com
+ENEL,Enel SpA,enel.com
+AIR,Airbus SE,airbus.com
+LHA,Deutsche Lufthansa AG,lufthansagroup.com

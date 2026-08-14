@@ -1,0 +1,19 @@
+name,domain
+# Tier 5 OCW/university seeds for VM2 -- ENTIRELY DISJOINT from VM1's
+# ocw_sites.csv (mit, oyc.yale, oli.cmu, ocw.uci, ocw.jhsph, ocw.tufts,
+# ocw.usu, ocw.tudelft, ocw.kyoto-u, open.uct, ocw.utm, nptel, oer.avu).
+# VM1 runs tiers 1,2,3,4,6,7 (no tier 5); OCW is a VM2-only source.
+Berkeley OCW,ocw.berkeley.edu
+UPC Barcelona OCW,ocw.upc.edu
+Politecnico di Milano OCW,ocw.polimi.it
+METU OpenCourseWare,ocw.metu.edu.tr
+University of Tokyo OCW,ocw.u-tokyo.ac.jp
+Osaka University OCW,ocw.osaka-u.ac.jp
+Kyushu University OCW,ocw.kyushu-u.ac.jp
+Hokkaido University OCW,ocw.hokudai.ac.jp
+National Tsing Hua OCW,ocw.nthu.edu.tw
+Notre Dame OCW,ocw.nd.edu
+Open University UK,open.ac.uk
+University of Brasilia OCW,ocw.unb.br
+Universidad de Murcia OCW,ocw.um.es
+Universitat Oberta de Catalunya,ocw.uoc.edu

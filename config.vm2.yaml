@@ -1,14 +1,27 @@
 ########################################################################
 # VM2 profile overlay (4 vCPU / 16 GiB -- Azure Standard_D4ads_v7).
 #
-# VM2 is the download-only CONSUMER node: it does no harvesting, imports
-# a 60% share of VM1's discovered URLs via the Drive handoff folder
-# (multi_node defaults in config.yaml), downloads/validates them, and
-# delivers to its own PptxSweeper_Delivery_VM2 folder (RCLONE_ROOT_FOLDER
-# in .env). Loaded via `PPTXSWEEPER_OVERRIDE=config.vm2.yaml`.
+# VM2 is the CONSUMER node: it imports a share of VM1's discovered URLs
+# via the Drive handoff folder (PptxSweeper_Handoff/) and delivers to its
+# OWN folder (RCLONE_ROOT_FOLDER=PptxSweeper_Delivery_VM2_Azure). It ALSO
+# hunts its own URLs from ENTIRELY DIFFERENT sources (see the
+# harvesters.* overrides + seeds/cdx_domains_vm2.txt, seeds/sources_vm2/,
+# seeds/ocw_sites_vm2.csv, seeds/central_banks_vm2.csv,
+# seeds/global_tickers_vm2.csv), but those self-sourced URLs stay on
+# STANDBY: download.handoff_first keeps the downloader on the handed-off
+# queue until it drains, then it starts on VM2's own harvest.
 #
-# Only the knobs that differ from config.yaml are listed -- everything
-# else inherits the base config, so this file cannot drift out of sync.
+# Run as:  pptxsweeper run --tiers 1,2,3,4,5,7 --handoff consumer
+#   (tier 5 OCW is a VM2-ONLY source; VM1 runs tiers 1,2,3,4,6,7, so the
+#   two machines never harvest the same API or seed domain.)
+#
+# .env on VM2:  NODE_ID=1  NODE_COUNT=1   (owns 100% of ITS OWN disjoint
+#   seed set; the handoff CSV prefix node1_ never collides with VM1's
+#   node0_).
+#
+# Loaded via `PPTXSWEEPER_OVERRIDE=config.vm2.yaml`. Only the knobs that
+# differ from config.yaml are listed -- everything else inherits the
+# base config, so this file cannot drift out of sync.
 ########################################################################
 
 download:
@@ -24,6 +37,10 @@ download:
   # Classify + LibreOffice are the memory hogs; keep headroom on this
   # box too even though it has 16 GiB (cgroup cap is the backstop).
   min_free_ram_gb: 2.5
+  # CONSUMER PRIORITY: while ANY handoff-discovered URL is pending, only
+  # claim handoff rows -- this node's own harvested URLs stay on standby
+  # until the handed-off queue drains (see dao.claim_urls handoff_first).
+  handoff_first: true
 
 disk:
   # OS-level backstop on the 30 GB boot disk.
@@ -44,3 +61,78 @@ conversion:
   # ~0.5-1 GiB transient) alongside 4 classify workers.
   max_concurrent: 2
   timeout_s: 180           # headroom for big legacy .ppt
+
+# ----------------------------------------------------------------------
+# VM2's OWN sources -- entirely disjoint from VM1's.
+# VM1 uses seeds/cdx_domains.txt, seeds/sources/, seeds/central_banks.csv,
+# seeds/sp1500_tickers.csv, seeds/ocw_sites.csv and the config.yaml
+# tier3/tier7 lists. Every path/list below points at VM2-only seeds.
+# ----------------------------------------------------------------------
+harvesters:
+  tier1:
+    # Wayback CDX sweep of VM2's own domain universe (universities
+    # worldwide, NGOs, tech, regional bodies) -- disjoint from VM1's.
+    domain_seeds_file: ./seeds/cdx_domains_vm2.txt
+  tier2:
+    # Investor-relations decks from GLOBAL (non-US) companies, not VM1's
+    # S&P 1500 US universe.
+    seed_tickers_file: ./seeds/global_tickers_vm2.csv
+  tier3:
+    # US agencies VM1 does NOT crawl (VM1 owns the Fed/reserve set).
+    sitemap_domains:
+      - epa.gov
+      - nih.gov
+      - nsf.gov
+      - nasa.gov
+      - noaa.gov
+      - doe.gov
+      - usgs.gov
+      - hud.gov
+      - sba.gov
+      - irs.gov
+      - state.gov
+      - commerce.gov
+      - justice.gov
+      - dhs.gov
+      - fcc.gov
+      - sec.gov
+      - usda.gov
+      - va.gov
+      - defense.gov
+      - army.mil
+      - navy.mil
+      - af.mil
+    fed_regional_banks: []
+  tier4:
+    # International orgs + regional monetary institutions, disjoint from
+    # VM1's seeds/sources/ and seeds/central_banks.csv.
+    generic_sources_dir: ./seeds/sources_vm2
+    central_banks_seed: ./seeds/central_banks_vm2.csv
+  tier5:
+    # OCW -- a VM2-ONLY tier (VM1 runs tiers 1,2,3,4,6,7).
+    ocw_seed_file: ./seeds/ocw_sites_vm2.csv
+  tier7:
+    govdata:
+      # National open-data portals VM1 does NOT crawl (VM1 owns the
+      # EU/US/UA/RO/LV/AR/CL/IL/SI set in config.yaml).
+      ckan_portals:
+        - "https://data.gov.in"            # India
+        - "https://data.govt.nz"           # New Zealand
+        - "https://datos.gob.mx"           # Mexico
+        - "https://data.gov.my"            # Malaysia
+        - "https://data.gov.sa"            # Saudi Arabia
+        - "https://data.gov.bh"            # Bahrain
+        - "https://data.brussels"          # Brussels capital region
+        - "https://www.dati.lombardia.it"  # Lombardy (Italy)
+        - "https://opendata.rdw.nl"        # NL vehicle authority
+        - "https://data.melbourne.vic.gov.au"  # City of Melbourne
+        - "https://datos.gob.uy"           # Uruguay
+    standards:
+      # Standards bodies with browseable document trees, disjoint from
+      # VM1's 3GPP/IETF/OASIS/open-std/ieee802 roots.
+      autoindex_roots:
+        - "https://www.etsi.org/deliver/"
+        - "https://www.itu.int/dms_pub/"
+        - "https://www.3gpp2.org/Public_html/specs/"
+        - "https://www.unicode.org/reports/"
+        - "https://www.w3.org/TR/"
