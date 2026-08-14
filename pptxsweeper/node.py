@@ -36,7 +36,9 @@ class NodeIdentity:
         node_count = int(os.environ.get("NODE_COUNT", "1"))
         if node_count < 1:
             raise ValueError("NODE_COUNT must be >= 1")
-        if not 0 <= node_id < node_count:
+        if node_id < 0:
+            raise ValueError(f"NODE_ID must be >= 0, got {node_id}")
+        if node_count > 1 and node_id >= node_count:
             raise ValueError(f"NODE_ID must be in [0, {node_count}), got {node_id}")
         return cls(node_id, node_count)
 

@@ -90,6 +90,28 @@ def test_multinode_interleaved_batch_ids(registry, tmp_path):
     reg1.close()
 
 
+def test_standalone_node_namespace_id(monkeypatch):
+    """A standalone node (NODE_COUNT=1) may use any NODE_ID >= 0: with a
+    single node every owns_* check is True and node_id is purely a
+    namespace (handoff CSV prefix, batch numbering) so two independent
+    single-node machines never collide."""
+    monkeypatch.setenv("NODE_ID", "1")
+    monkeypatch.setenv("NODE_COUNT", "1")
+    node = NodeIdentity.from_env()
+    assert node.node_id == 1
+    assert node.node_count == 1
+    assert node.owns_domain("example.edu") is True
+    assert node.owns_page(0) is True
+    assert node.owns_batch_id(1) is True
+    assert node.first_batch_id() == 2   # distinct from node0's 1
+
+    # sanity: invalid combos still rejected
+    monkeypatch.setenv("NODE_ID", "2")
+    monkeypatch.setenv("NODE_COUNT", "2")
+    with pytest.raises(ValueError):
+        NodeIdentity.from_env()
+
+
 def test_domain_sharding_partition():
     """Every domain is owned by exactly one node."""
     nodes = [NodeIdentity(i, 4) for i in range(4)]
