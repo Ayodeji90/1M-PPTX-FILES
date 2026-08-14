@@ -19,6 +19,9 @@
 #     verbatim (a wrong path makes the unit fail with "Failed to load
 #     environment files").
 #   - PPTXSWEEPER_OVERRIDE points at the VM tuning profile (config.vm.yaml).
+#   - ExecStart runs with --handoff producer: VM1 is the PRODUCER node and
+#     hands a share of its discovered URLs to VM2 (the download-only
+#     consumer, see deploy/pptxsweeper-vm2.service) via Drive.
 #   - .env must exist in WorkingDirectory (CONTACT_EMAIL, NODE_ID, ...).
 #   - First-time rclone auth still needs one manual step (see DEPLOY.md:
 #     `rclone config` with a laptop-generated token) -- run it once before
@@ -37,7 +40,7 @@ Group=azureuser
 WorkingDirectory=/home/azureuser/1M-PPTX-FILES
 Environment=PPTXSWEEPER_OVERRIDE=config.vm.yaml
 EnvironmentFile=/home/azureuser/1M-PPTX-FILES/.env
-ExecStart=/home/azureuser/1M-PPTX-FILES/.venv/bin/pptxsweeper run
+ExecStart=/home/azureuser/1M-PPTX-FILES/.venv/bin/pptxsweeper run --handoff producer
 Restart=always
 RestartSec=30
 # SIGTERM lets the pipeline finish in-flight work gracefully (download
