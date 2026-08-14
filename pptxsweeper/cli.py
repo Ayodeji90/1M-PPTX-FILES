@@ -45,7 +45,8 @@ def _rclone(cfg: Config):
     return Rclone(bin=rc["bin"], remote=cfg.rclone_remote(),
                   root_folder=cfg.rclone_root_folder(),
                   retries=int(cfg.raw["upload"]["max_retries"]),
-                  retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]))
+                  retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]),
+                  timeout=int(rc.get("timeout_s", 900)))
 
 
 def _rclone_handoff(cfg: Config):
@@ -56,7 +57,8 @@ def _rclone_handoff(cfg: Config):
     root = cfg.raw["multi_node"].get("handoff_root", "PptxSweeper_Handoff")
     return Rclone(bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=root,
                   retries=int(cfg.raw["upload"]["max_retries"]),
-                  retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]))
+                  retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]),
+                  timeout=int(rc.get("timeout_s", 900)))
 
 
 @click.group()

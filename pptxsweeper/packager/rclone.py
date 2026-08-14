@@ -28,19 +28,25 @@ class RcloneError(RuntimeError):
 class Rclone:
     def __init__(self, bin: str = "rclone", remote: str = "gdrive",
                  root_folder: str = "PptxSweeper_Delivery",
-                 retries: int = 5, retry_backoff_s: list[int] | None = None):
+                 retries: int = 5, retry_backoff_s: list[int] | None = None,
+                 timeout: int = 900):
         self.bin = bin
         self.remote = remote
         self.root_folder = root_folder
         self.retries = retries
         self.retry_backoff_s = retry_backoff_s or [10, 30, 120, 300, 900]
+        # Wall-clock cap per rclone call: a stalled Drive connection must
+        # not be able to block the deliver loop for 3600s * retries.
+        self.timeout = timeout
 
     # ------------------------------------------------------------------
     def remote_path(self, *parts: str) -> str:
         segments = [self.root_folder, *[p for p in parts if p]]
         return f"{self.remote}:{'/'.join(segments)}"
 
-    def _run(self, args: list[str], retry: bool = True, timeout: int = 3600) -> subprocess.CompletedProcess:
+    def _run(self, args: list[str], retry: bool = True,
+             timeout: int | None = None) -> subprocess.CompletedProcess:
+        timeout = timeout or self.timeout
         cmd = [self.bin, *args]
         attempts = self.retries if retry else 1
         last: subprocess.CompletedProcess | None = None
@@ -91,20 +97,21 @@ class Rclone:
         return entries[0] if entries else None
 
     def copy_dir(self, local_dir: Path, *remote_parts: str,
-                 bwlimit: str | None = None) -> None:
+                 bwlimit: str | None = None, timeout: int | None = None) -> None:
         args = ["copy", str(local_dir), self.remote_path(*remote_parts),
                 "--transfers", "8", "--checkers", "16"]
         if bwlimit:
             args += ["--bwlimit", bwlimit]
-        self._run(args)
+        self._run(args, timeout=timeout)
 
-    def check(self, local_dir: Path, *remote_parts: str, method: str = "size-only") -> bool:
+    def check(self, local_dir: Path, *remote_parts: str, method: str = "size-only",
+              timeout: int | None = None) -> bool:
         """Verify local_dir contents exist identically on the remote."""
         args = ["check", str(local_dir), self.remote_path(*remote_parts), "--one-way"]
         if method == "size-only":
             args.append("--size-only")
         try:
-            self._run(args, retry=False)
+            self._run(args, retry=False, timeout=timeout)
             return True
         except RcloneError:
             return False

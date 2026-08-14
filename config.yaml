@@ -32,6 +32,14 @@ rclone:
   status_folder: _status
   backups_folder: registry_backups
   verify_method: size-only   # size-only | hash
+  # Wall-clock cap on a single rclone call (seconds). A stalled Google
+  # Drive connection (the recurring "upload silently stops" hang) must not
+  # be able to block the deliver loop for the old 3600s default * retries.
+  timeout_s: 900
+  # Tighter, single-attempt budget for the best-effort review/ -> _review/
+  # sync, which re-runs every classify pass: a fast failure (keep local
+  # payloads, retry next pass) is strictly better than a long stall.
+  review_sync_timeout_s: 300
 
 batch:
   size: 25000

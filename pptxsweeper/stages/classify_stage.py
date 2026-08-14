@@ -677,11 +677,13 @@ class ClassifyStage:
         be able to fill the boot disk and wedge the OS."""
         review_folder = self.cfg.raw["rclone"]["review_folder"]
         hard_min = float(self.cfg.raw.get("disk", {}).get("hard_min_free_gb", 2))
+        sync_timeout = int(self.cfg.raw.get("rclone", {}).get("review_sync_timeout_s", 300))
         self._write_review_sidecars()
         rclone.mkdir(review_folder)
-        rclone.copy_dir(self.review_dir, review_folder)
+        rclone.copy_dir(self.review_dir, review_folder, timeout=sync_timeout)
         if not rclone.check(self.review_dir, review_folder,
-                            method=self.cfg.raw["rclone"]["verify_method"]):
+                            method=self.cfg.raw["rclone"]["verify_method"],
+                            timeout=sync_timeout):
             log.warning("review sync verification failed; keeping local payloads")
             # Last line of defense: if the disk is about to die (free <
             # hard floor) AND the sync failed, prune the OLDEST payloads
