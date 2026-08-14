@@ -1,0 +1,46 @@
+########################################################################
+# VM2 profile overlay (4 vCPU / 16 GiB -- Azure Standard_D4ads_v7).
+#
+# VM2 is the download-only CONSUMER node: it does no harvesting, imports
+# a 60% share of VM1's discovered URLs via the Drive handoff folder
+# (multi_node defaults in config.yaml), downloads/validates them, and
+# delivers to its own PptxSweeper_Delivery_VM2 folder (RCLONE_ROOT_FOLDER
+# in .env). Loaded via `PPTXSWEEPER_OVERRIDE=config.vm2.yaml`.
+#
+# Only the knobs that differ from config.yaml are listed -- everything
+# else inherits the base config, so this file cannot drift out of sync.
+########################################################################
+
+download:
+  # 4 vCPU and mostly dedicated to download+classify: 64 workers keeps
+  # the NIC busy without starving classify (workers are I/O-bound
+  # coroutines, each holding one domain at a time).
+  concurrency: 64
+  # Bigger buffer than VM1: 3000 staged payloads is a few GB on disk,
+  # and the min_free_disk_gb guard below still protects the 30 GB boot
+  # disk from filling.
+  max_downloaded_backlog: 3000
+  min_free_disk_gb: 10
+  # Classify + LibreOffice are the memory hogs; keep headroom on this
+  # box too even though it has 16 GiB (cgroup cap is the backstop).
+  min_free_ram_gb: 2.5
+
+disk:
+  # OS-level backstop on the 30 GB boot disk.
+  hard_min_free_gb: 4
+  reclaim_max_age_h: 24
+
+classify:
+  workers: 4               # 4 vCPU -> 4 quality-engine workers
+  worker_memory_mb: 512    # per-worker working-set budget for the RAM cap
+  chunk_limit: 100         # smaller passes so uploads interleave nicely
+  # review/ payloads must FIT the 30 GB boot disk.
+  review_dir_cap_gb: 8
+  # Self-heal wedged classify runs the same way as VM1.
+  watchdog_stall_min: 10
+
+conversion:
+  # 16 GiB RAM: 2 concurrent LibreOffice conversions are safe (each
+  # ~0.5-1 GiB transient) alongside 4 classify workers.
+  max_concurrent: 2
+  timeout_s: 180           # headroom for big legacy .ppt
