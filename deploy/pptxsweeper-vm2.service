@@ -1,0 +1,53 @@
+# PptxSweeper systemd service for the SECOND Azure VM (Standard_D4ads_v7,
+# 4 vCPU / 16 GiB) running as the download-only CONSUMER node.
+#
+# It does NO harvesting: it imports a share of VM1's discovered URLs from
+# the shared Drive handoff folder and downloads/validates/delivers them
+# to its own RCLONE_ROOT_FOLDER (PptxSweeper_Delivery_VM2).
+#
+# Install:
+#   sudo cp deploy/pptxsweeper-vm2.service /etc/systemd/system/pptxsweeper.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pptxsweeper
+#
+# VM1 (producer) runs the plain deploy/pptxsweeper.service with
+# `run --handoff producer` in ExecStart.
+
+[Unit]
+Description=PptxSweeper million-scale .ppt/.pptx acquisition pipeline (VM2 consumer)
+Documentation=https://github.com/Ayodeji90/1M-PPTX-FILES
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/1M-PPTX-FILES
+Environment=PPTXSWEEPER_OVERRIDE=config.vm2.yaml
+EnvironmentFile=/home/azureuser/1M-PPTX-FILES/.env
+ExecStart=/home/azureuser/1M-PPTX-FILES/.venv/bin/pptxsweeper run --no-harvest --handoff consumer
+Restart=always
+RestartSec=30
+# SIGTERM lets the pipeline finish in-flight work gracefully (download
+# grace window + subprocess shutdown), so no row is ever lost.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+# One pipeline per machine by design (sqlite single-writer).
+# Many concurrent sockets for the async downloader.
+LimitNOFILE=65536
+LimitNPROC=1024
+# ----------------------------------------------------------------------
+# MEMORY ARMOR: 16 GiB box. The cgroup caps convert a RAM spike into a
+# clean service restart instead of an OS-level swap-thrash wedge.
+#   MemoryHigh=12G  soft cap -- reclaim pressure early
+#   MemoryMax=14G   hard cap  -- cgroup OOM kills only the pipeline
+#   MemorySwapMax=1G the pipeline may only thrash 1G of swap
+#   OOMPolicy=kill  on cgroup OOM, systemd restarts the service in ~30s
+MemoryHigh=12G
+MemoryMax=14G
+MemorySwapMax=1G
+OOMPolicy=kill
+
+[Install]
+WantedBy=multi-user.target
