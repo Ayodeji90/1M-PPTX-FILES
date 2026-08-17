@@ -209,7 +209,8 @@ def package(dry_run: bool, stream: bool, force: bool, loop_: bool) -> None:
     from .packager.package_stage import PackageStage
     stage = PackageStage(cfg, reg, dry_run=dry_run)
     if stream:
-        click.echo(json.dumps(stage.stream_upload(), indent=2))
+        cap = int(cfg.raw.get("delivery", {}).get("max_files_per_cycle", 100))
+        click.echo(json.dumps(stage.stream_upload(max_files=cap), indent=2))
         return
     while True:
         result = stage.run(force=force)

@@ -254,6 +254,13 @@ delivery:
   # whole decks (the legacy contract). Flip per VM as the client's
   # requirements land.
   image: false
+  # Cap per stream-upload cycle. Without a cap, a backlog of hundreds of
+  # pages all get hardlinked into the batch dir and pushed in ONE rclone
+  # copy; Google Drive's free-tier API quota throttles that copy so hard
+  # it never finishes, verification fails, and nothing marks delivered.
+  # A small cap keeps every cycle bounded: copy completes, sizes verify,
+  # pages mark delivered, next cycle takes the next slice.
+  max_files_per_cycle: 100
 
 classify:
   review_dir_cap_gb: 20    # local review/ payloads pruned after Drive sync
