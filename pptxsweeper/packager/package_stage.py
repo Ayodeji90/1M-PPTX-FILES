@@ -291,6 +291,13 @@ class PackageStage:
             budget_left = self.daily_budget - self.reg.budget_used_today()
             folder = batch["folder_name"]
             local_batch = self.build_dir / folder
+            # Fresh build dir per cycle: only THIS cycle's prepared files
+            # are copied, so a Drive-throttled upload stays bounded by
+            # max_files_per_cycle and finishes within the rclone timeout.
+            # Copying the accumulated dir (every file since the batch
+            # opened) made each cycle exceed the 900s timeout, retry 5x,
+            # and never verify -> nothing marked delivered.
+            shutil.rmtree(local_batch, ignore_errors=True)
             local_batch.mkdir(parents=True, exist_ok=True)
             high_in_batch = counts["high"]
             medium_in_batch = counts["medium"]
@@ -365,7 +372,11 @@ class PackageStage:
 
             # one parallel transfer for the whole set, one listing to verify
             try:
-                self.rclone.copy_dir(local_batch, folder)
+                # Tight timeout: a stalled copy should fail fast and let
+                # the next cycle retry the same bounded slice (names are
+                # idempotent) instead of blocking the deliver loop for
+                # 5 x 900s of retries.
+                self.rclone.copy_dir(local_batch, folder, timeout=300)
                 listing = {e["Name"]: int(e.get("Size", -1))
                            for e in self.rclone.lsjson(folder)}
             except Exception:

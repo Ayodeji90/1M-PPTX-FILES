@@ -124,7 +124,10 @@ class Rclone:
                 # hundreds of files. tpslimit paces rclone's API calls so
                 # the quota is never tripped: transfers stall for minutes
                 # and verification fails -> nothing marks delivered.
-                "--tpslimit", "8", "--tpslimit-burst", "16"]
+                # Keep the per-VM pace modest: VM1 and VM2 share one Drive
+                # account, so two pipelines at 8 tps each blow past the
+                # free-tier query budget together.
+                "--tpslimit", "4", "--tpslimit-burst", "8"]
         if bwlimit:
             args += ["--bwlimit", bwlimit]
         self._run(args, retry=retry, timeout=timeout)

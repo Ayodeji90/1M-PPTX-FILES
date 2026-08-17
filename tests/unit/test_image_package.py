@@ -111,7 +111,7 @@ class _FakeRclone:
     def mkdir(self, folder=""):
         self._p(folder).mkdir(parents=True, exist_ok=True)
 
-    def copy_dir(self, local, folder):
+    def copy_dir(self, local, folder, timeout=None, **kw):
         self.mkdir(folder)
         import shutil
         for f in Path(local).iterdir():
