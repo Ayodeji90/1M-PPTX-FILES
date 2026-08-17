@@ -16,7 +16,9 @@ from ..node import NodeIdentity
 log = logging.getLogger("pptxsweeper.harvest")
 
 PRESENTATION_EXTENSIONS = (".pptx", ".ppt")
-DOC_EXTENSIONS = PRESENTATION_EXTENSIONS   # client decision: ppt/pptx only, no pdf
+# PDFs added for image delivery: graphical pages are extracted from PDF
+# reports as well as decks, and PDF volume is the main path to 1M images.
+DOC_EXTENSIONS = (".pptx", ".ppt", ".pdf")
 
 
 @dataclass

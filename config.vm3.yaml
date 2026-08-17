@@ -56,6 +56,20 @@ conversion:
   timeout_s: 180
 
 # ----------------------------------------------------------------------
+# IMAGE DELIVERY (the new phase): extract graphical pages from classified
+# decks/PDFs and deliver ONE PNG per page into a NEW top-level Drive
+# folder on VM3's OWN account (RCLONE_IMAGE_ROOT_FOLDER=
+# PptxSweeper_Image_Delivery_VM3).
+# ----------------------------------------------------------------------
+delivery:
+  image: true
+
+extract:
+  max_concurrent: 2
+  dpi: 150
+  min_free_disk_gb: 6
+
+# ----------------------------------------------------------------------
 # VM3's OWN sources -- entirely disjoint from BOTH VM1 and VM2.
 # VM1 uses seeds/cdx_domains.txt + seeds/sources/ + tier3 US fed set;
 # VM2 uses seeds/*_vm2.* + its tier3 US agencies. VM3's lists below

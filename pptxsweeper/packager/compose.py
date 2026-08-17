@@ -12,6 +12,7 @@ import logging
 import math
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..db.dao import Registry
 
@@ -85,6 +86,50 @@ def deliverable_candidates(reg: Registry, batch_id: int | None = None) -> list[s
         q = q.format(batch_clause="OR f.batch_id = ?")
         return reg.conn.execute(q, (batch_id,)).fetchall()
     return reg.conn.execute(q.format(batch_clause="")).fetchall()
+
+
+def deliverable_page_candidates(reg: Registry, batch_id: int | None = None) -> list[sqlite3.Row]:
+    """Extracted page images (image delivery) not yet delivered: parent
+    file DELIVER, url in 'classified'/'reserve', or already assigned to
+    `batch_id` (crash resume). Page rows carry the parent deck's quality
+    class (composition is applied per image) plus per-page identity."""
+    q = """
+        SELECT p.id, p.file_id, p.page_index, p.sha256 AS image_sha256,
+               p.phash, p.local_path, p.status AS page_status,
+               p.delivered_filename, p.batch_id,
+               f.quality, f.quality_report, f.original_filename,
+               f.slide_count, f.sha256 AS source_file_sha256,
+               u.id AS url_id, u.status AS url_status, u.url AS source_url,
+               u.domain AS source_domain, u.created_at AS collection_ts,
+               u.http_status, u.robots_status, u.retrieval_method,
+               u.metadata AS url_metadata
+        FROM pages p
+        JOIN files f ON f.id = p.file_id
+        JOIN urls u ON u.id = f.url_id
+        WHERE p.status='extracted' AND p.delivered_at IS NULL
+          AND (u.status IN ('classified','reserve') {batch_clause})
+        ORDER BY p.id
+    """
+    if batch_id is not None:
+        rows = reg.conn.execute(q.format(batch_clause="OR p.batch_id = ?"),
+                                (batch_id,)).fetchall()
+    else:
+        rows = reg.conn.execute(q.format(batch_clause="")).fetchall()
+    # pages has no file_size column; the budget check needs the PNG size.
+    # Deliver plain dicts (the selector/package code reads by key, and
+    # sqlite3.Row cannot be built from a dict).
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            if d.get("local_path"):
+                d["file_size"] = Path(d["local_path"]).stat().st_size
+            else:
+                d["file_size"] = 0
+        except OSError:
+            d["file_size"] = 0
+        out.append(d)
+    return out
 
 
 def _safe_composition(high_min_pct: float, medium_max_pct: float) -> tuple[float, float]:

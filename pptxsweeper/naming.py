@@ -33,15 +33,19 @@ def batch_folder_name(batch_id: int, padding_width: int | None = None) -> str:
     return f"BATCH_{batch_id:0{width}d}"
 
 
-def delivered_filename(batch_id: int, counter: int, ext: str, padding_width: int | None = None) -> str:
+def delivered_filename(batch_id: int, counter: int, ext: str,
+                       padding_width: int | None = None,
+                       prefix: str = "file") -> str:
+    """Contract filename: `BATCH_{NN}_{prefix}_{NNNNN}.{ext}`. `prefix` is
+    'file' for deck delivery (contract) and 'img' for image delivery."""
     if ext.startswith("."):
         ext = ext[1:]
-    if ext not in ("pptx", "pdf"):
-        raise ValueError(f"delivered extension must be pptx or pdf, got {ext!r}")
+    if ext not in ("pptx", "pdf", "png"):
+        raise ValueError(f"delivered extension must be pptx, pdf or png, got {ext!r}")
     if counter < 1 or counter > 10 ** FILE_PADDING - 1:
         raise ValueError(f"file counter out of range: {counter}")
     width = padding_width or batch_padding_width(batch_id)
-    return f"BATCH_{batch_id:0{width}d}_file_{counter:0{FILE_PADDING}d}.{ext}"
+    return f"BATCH_{batch_id:0{width}d}_{prefix}_{counter:0{FILE_PADDING}d}.{ext}"
 
 
 def manifest_filename(batch_id: int, padding_width: int | None = None) -> str:
@@ -134,6 +138,44 @@ class BatchAllocator:
                 self.reg.conn.execute(
                     "UPDATE files SET delivered_filename=?, batch_id=?, updated_at=? WHERE id=?",
                     (name, batch_id, utcnow(), file_id),
+                )
+                return name
+
+        return with_busy_retry(_do)
+
+    # ------------------------------------------------------------------
+    def assign_page_filename(self, batch_id: int, page_id: int, ext: str = "png",
+                             prefix: str = "img") -> str:
+        """Assign the next sequential name in `batch_id` to pages.id=page_id
+        (image delivery). Idempotent, same guarantees as assign_filename."""
+        def _do():
+            with self.reg.tx():
+                existing = self.reg.conn.execute(
+                    "SELECT delivered_filename FROM pages WHERE id=? AND batch_id=?",
+                    (page_id, batch_id),
+                ).fetchone()
+                if existing and existing[0]:
+                    return existing[0]
+
+                batch = self.reg.conn.execute(
+                    "SELECT padding_width, next_file_counter, state FROM batches WHERE batch_id=?",
+                    (batch_id,),
+                ).fetchone()
+                if batch is None:
+                    raise ValueError(f"batch {batch_id} does not exist")
+                if batch["state"] not in ("open", "packing"):
+                    raise ValueError(f"batch {batch_id} is {batch['state']}; cannot assign names")
+
+                counter = batch["next_file_counter"]
+                name = delivered_filename(batch_id, counter, ext, batch["padding_width"],
+                                          prefix=prefix)
+                self.reg.conn.execute(
+                    "UPDATE batches SET next_file_counter=? WHERE batch_id=?",
+                    (counter + 1, batch_id),
+                )
+                self.reg.conn.execute(
+                    "UPDATE pages SET delivered_filename=?, batch_id=?, updated_at=? WHERE id=?",
+                    (name, batch_id, utcnow(), page_id),
                 )
                 return name
 

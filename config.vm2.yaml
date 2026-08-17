@@ -63,6 +63,21 @@ conversion:
   timeout_s: 180           # headroom for big legacy .ppt
 
 # ----------------------------------------------------------------------
+# IMAGE DELIVERY (the new phase): extract graphical pages from classified
+# decks/PDFs and deliver ONE PNG per page into a NEW top-level Drive
+# folder (RCLONE_IMAGE_ROOT_FOLDER=PptxSweeper_Image_Delivery_VM2).
+# ----------------------------------------------------------------------
+delivery:
+  image: true
+
+extract:
+  # 4 vCPU: 2 concurrent renders alongside 4 classify workers + 2
+  # conversions fits 16 GiB comfortably.
+  max_concurrent: 2
+  dpi: 150
+  min_free_disk_gb: 6
+
+# ----------------------------------------------------------------------
 # VM2's OWN sources -- entirely disjoint from VM1's.
 # VM1 uses seeds/cdx_domains.txt, seeds/sources/, seeds/central_banks.csv,
 # seeds/sp1500_tickers.csv, seeds/ocw_sites.csv and the config.yaml

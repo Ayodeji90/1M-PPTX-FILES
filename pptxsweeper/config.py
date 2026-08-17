@@ -155,6 +155,14 @@ class Config:
         back to rclone.root_folder in config.yaml)."""
         return os.environ.get("RCLONE_ROOT_FOLDER", self.raw["rclone"]["root_folder"])
 
+    def rclone_image_root_folder(self) -> str:
+        """Delivery folder for IMAGE mode (the new image-delivery phase).
+        A separate top-level folder per machine, so extracted page images
+        never mix with the deck deliveries. Per-machine override via
+        RCLONE_IMAGE_ROOT_FOLDER; falls back to the deck root + '_Images'."""
+        return os.environ.get("RCLONE_IMAGE_ROOT_FOLDER",
+                              self.rclone_root_folder() + "_Images")
+
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
     """Recursively overlay `overlay` onto `base` in place (dicts merge,

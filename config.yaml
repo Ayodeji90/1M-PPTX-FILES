@@ -6,7 +6,9 @@
 
 # Only these formats are ever queued, downloaded, or delivered.
 # Enforced in three places: URL filter, download (magic bytes), classify.
-allowed_formats: ["pptx", "ppt"]
+# pdf added for image delivery (graphical pages extracted from PDF reports
+# as well as decks).
+allowed_formats: ["pptx", "ppt", "pdf"]
 
 contact_email_env: CONTACT_EMAIL
 user_agent_template: "PptxSweeperBot/1.0 (dataset research; {contact_email})"
@@ -17,6 +19,7 @@ paths:
   download_tmp_dir: ./data/tmp_downloads
   staging_dir: ./data/staging
   review_dir: ./data/review
+  pages_dir: ./data/pages
   logs_dir: ./data/logs
   seeds_dir: ./seeds
   status_dir: ./data/status
@@ -170,8 +173,8 @@ common_crawl:
   # NOTE (verified 2026-07): Common Crawl captures essentially ZERO
   # .ppt/.pptx files -- its crawler skips PowerPoint binaries -- so this
   # harvester will find very little. Wayback CDX + Tiers 2-6 are the
-  # real ppt/pptx sources. (Client decision: ppt/pptx only, no pdf.)
-  extensions: [".pptx", ".ppt"]
+  # real ppt/pptx sources. (pdf added for image delivery.)
+  extensions: [".pptx", ".ppt", ".pdf"]
 
 quality:
   epsilon: 0.03
@@ -223,6 +226,34 @@ conversion:
   # global semaphore. Each soffice needs ~300-500MB RAM: keep it at 1-2 on
   # small VMs, raise on CPU-rich boxes with many .ppt files to convert.
   max_concurrent: 2
+
+# Image delivery (the client's new deliverable: graphical pages as PNGs).
+# When delivery.image=true the pipeline extracts graphical pages from
+# classified decks/PDFs (extract stage) and delivers ONE PNG per page
+# instead of whole decks. Composition rules, batch folders, budgets and
+# verification are unchanged -- only the delivered unit changes.
+extract:
+  # Render resolution (DPI). 150 keeps charts crisp at ~0.5-2MB/page.
+  dpi: 150
+  # Concurrent renders (soffice + pdftoppm are CPU-heavy): 2 fits a
+  # 4-vCPU box that also runs classify; raise on dedicated extract VMs.
+  max_concurrent: 2
+  page_timeout_s: 120
+  conv_timeout_s: 180
+  # Perceptual near-dup threshold (Hamming distance, 0-64): pages within
+  # this many bits are treated as the same image.
+  phash_distance: 10
+  chunk_limit: 50
+  # Pause extraction when free disk falls below this (pages accumulate
+  # until delivered and deleted).
+  min_free_disk_gb: 2
+  pdftoppm_bin: pdftoppm
+
+delivery:
+  # true = deliver extracted page PNGs (image mode); false = deliver
+  # whole decks (the legacy contract). Flip per VM as the client's
+  # requirements land.
+  image: false
 
 classify:
   review_dir_cap_gb: 20    # local review/ payloads pruned after Drive sync

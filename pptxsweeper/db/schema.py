@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # NOTE on statuses (urls.status):
 #   discovered    - harvester wrote the candidate
@@ -144,6 +144,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
     screen_pii           TEXT,
     screen_minors        TEXT,
     screen_prohibited    TEXT,
+    -- image delivery: which page of which source file, its own hashes
+    page_index           INTEGER,
+    image_sha256         TEXT,
+    phash                TEXT,
+    source_file_sha256   TEXT,
+    extraction_method    TEXT,
     final_status         TEXT,
     created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -163,6 +169,36 @@ CREATE TABLE IF NOT EXISTS upload_budget (
     day            TEXT PRIMARY KEY,   -- YYYY-MM-DD (UTC)
     bytes_uploaded INTEGER NOT NULL DEFAULT 0
 );
+
+-- Per-PAGE deliverables (image delivery): one row per graphical page
+-- extracted from a classified deck/PDF. The delivery unit is the page
+-- (a PNG render), not the source file. Exact dedup by image sha256,
+-- near-dup by perceptual hash (phash). status flow:
+--   pending    - selected, render not attempted yet
+--   extracted  - PNG rendered and on disk (extract/ dir)
+--   duplicate  - sha256 or phash matched an already-known image
+--   delivered  - uploaded to Drive and verified
+--   rejected   - render failed / not deliverable
+CREATE TABLE IF NOT EXISTS pages (
+    id                 INTEGER PRIMARY KEY,
+    file_id            INTEGER NOT NULL REFERENCES files(id),
+    page_index         INTEGER NOT NULL,
+    sha256             TEXT,
+    phash              TEXT,
+    local_path         TEXT,              -- rendered PNG location; NULL after delivery
+    status             TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','extracted','duplicate','delivered','rejected')),
+    delivered_filename TEXT UNIQUE,
+    batch_id           INTEGER,
+    delivered_at       TEXT,
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE (file_id, page_index)
+);
+CREATE INDEX IF NOT EXISTS idx_pages_file     ON pages(file_id);
+CREATE INDEX IF NOT EXISTS idx_pages_status   ON pages(status);
+CREATE INDEX IF NOT EXISTS idx_pages_sha256   ON pages(sha256);
+CREATE INDEX IF NOT EXISTS idx_pages_phash    ON pages(phash);
 
 -- Harvest progress markers (e.g. completed Common Crawl parquet parts)
 -- so multi-day discovery runs resume instead of rescanning.
@@ -184,7 +220,16 @@ CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind, created_at);
 """
 
 MIGRATIONS: dict[int, str] = {
-    # 2: "ALTER TABLE ...",   -- forward-only migrations appended here
+    # 2: image delivery -- audit_log gains per-page image columns. (The
+    #     `pages` table itself is CREATE TABLE IF NOT EXISTS in DDL, so it
+    #     appears on existing DBs automatically at next startup.)
+    2: """
+    ALTER TABLE audit_log ADD COLUMN page_index INTEGER;
+    ALTER TABLE audit_log ADD COLUMN image_sha256 TEXT;
+    ALTER TABLE audit_log ADD COLUMN phash TEXT;
+    ALTER TABLE audit_log ADD COLUMN source_file_sha256 TEXT;
+    ALTER TABLE audit_log ADD COLUMN extraction_method TEXT;
+    """,
 }
 
 

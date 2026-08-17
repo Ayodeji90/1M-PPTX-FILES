@@ -58,3 +58,23 @@ conversion:
   # the service cgroup cap (deploy/pptxsweeper.service MemoryMax=6G).
   max_concurrent: 1
   timeout_s: 180           # a little more headroom for big legacy .ppt
+
+# ----------------------------------------------------------------------
+# IMAGE DELIVERY (the new phase): extract graphical pages from classified
+# decks/PDFs and deliver ONE PNG per page into a NEW top-level Drive
+# folder (RCLONE_IMAGE_ROOT_FOLDER=PptxSweeper_Image_Delivery_VM1). The
+# deck pipeline keeps running for source acquisition; deliveries switch
+# to images.
+# ----------------------------------------------------------------------
+delivery:
+  image: true
+
+extract:
+  # 2 vCPU box shared with classify: keep renders serial-ish (each soffice
+  # + pdftoppm pass is CPU-heavy). 1 concurrent render fits the cgroup
+  # memory cap alongside classify's 2 workers + 1 conversion.
+  max_concurrent: 1
+  dpi: 150
+  # Pages accumulate on the 30 GB boot disk until delivered+deleted;
+  # pause extraction early so pages/ can never wedge the OS.
+  min_free_disk_gb: 6

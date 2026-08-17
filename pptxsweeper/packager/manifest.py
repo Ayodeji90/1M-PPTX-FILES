@@ -17,6 +17,10 @@ MANIFEST_COLUMNS = [
     "public_access_status",
     "screen_pirate", "screen_robots", "screen_rights", "screen_pii",
     "screen_minors", "screen_prohibited",
+    # Image delivery (per-page PNG): which page of which source file this
+    # image is, its own sha256, its perceptual hash, and how it was made.
+    "page_index", "image_sha256", "phash", "source_file_sha256",
+    "extraction_method",
     "final_status",
 ]
 
@@ -43,6 +47,41 @@ def manifest_row(file_row: dict) -> dict:
     retrieval = file_row.get("retrieval_method") or "origin"
     download_url = url_meta.get("wayback_snapshot_url") or file_row.get("source_url")
 
+    # Image delivery rows: the page-level identity (which page of which
+    # source file) and the image's own hashes. Deck rows leave these None.
+    page_index = file_row.get("page_index")
+    if page_index is not None:
+        return {
+            "delivered_filename": file_row.get("delivered_filename"),
+            "sha256": file_row.get("image_sha256") or file_row.get("sha256"),
+            "source_url": file_row.get("source_url"),
+            "source_domain": file_row.get("source_domain"),
+            "download_url": download_url,
+            "original_filename": file_row.get("original_filename"),
+            "format": "png",
+            "converted_from_ppt": 0,
+            "slide_count": file_row.get("page_index"),
+            "quality_class": file_row.get("quality"),
+            "collection_ts": file_row.get("collection_ts"),
+            "download_ts": url_meta.get("download_ts"),
+            "http_status": file_row.get("http_status"),
+            "robots_status": file_row.get("robots_status"),
+            "retrieval_method": retrieval,
+            "public_access_status": public_access_status(retrieval, file_row.get("http_status")),
+            "screen_pirate": compliance.get("pirate", "PASS"),
+            "screen_robots": compliance.get("robots", "PASS"),
+            "screen_rights": compliance.get("rights", "PASS"),
+            "screen_pii": compliance.get("pii", "PASS"),
+            "screen_minors": compliance.get("minors", "PASS"),
+            "screen_prohibited": compliance.get("prohibited", "PASS"),
+            "page_index": file_row.get("page_index"),
+            "image_sha256": file_row.get("image_sha256") or file_row.get("sha256"),
+            "phash": file_row.get("phash"),
+            "source_file_sha256": file_row.get("source_file_sha256"),
+            "extraction_method": file_row.get("extraction_method") or "libreoffice",
+            "final_status": "delivered",
+        }
+
     return {
         "delivered_filename": file_row.get("delivered_filename"),
         "sha256": file_row.get("sha256"),
@@ -66,6 +105,11 @@ def manifest_row(file_row: dict) -> dict:
         "screen_pii": compliance.get("pii", "PASS"),
         "screen_minors": compliance.get("minors", "PASS"),
         "screen_prohibited": compliance.get("prohibited", "PASS"),
+        "page_index": None,
+        "image_sha256": None,
+        "phash": None,
+        "source_file_sha256": None,
+        "extraction_method": None,
         "final_status": "delivered",
     }
 

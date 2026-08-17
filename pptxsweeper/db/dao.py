@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..utils.perceptual import hamming_distance
 from .schema import apply_schema
 
 _BUSY_RETRIES = 8
@@ -314,6 +315,96 @@ class Registry:
         if row is None:
             return False
         return row["url_id"] != url_id or row["delivered_at"] is not None
+
+    # ------------------------------------------------------------------
+    # Pages (image delivery)
+    # ------------------------------------------------------------------
+    def insert_page(self, **fields: Any) -> int:
+        def _do():
+            with self.tx():
+                cols = ", ".join(fields)
+                marks = ", ".join("?" for _ in fields)
+                cur = self.conn.execute(
+                    f"INSERT INTO pages ({cols}) VALUES ({marks})", tuple(fields.values())
+                )
+                return cur.lastrowid
+
+        return with_busy_retry(_do)
+
+    def update_page(self, page_id: int, **fields: Any) -> None:
+        fields["updated_at"] = utcnow()
+
+        def _do():
+            with self.tx():
+                cols = ", ".join(f"{k}=?" for k in fields)
+                self.conn.execute(
+                    f"UPDATE pages SET {cols} WHERE id=?", (*fields.values(), page_id))
+
+        with_busy_retry(_do)
+
+    def pages_for_file(self, file_id: int) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM pages WHERE file_id=? ORDER BY page_index", (file_id,)
+        ).fetchall()
+
+    def pages_by_status(self, status: str, limit: int | None = None) -> list[sqlite3.Row]:
+        q = "SELECT * FROM pages WHERE status=? ORDER BY id"
+        if limit:
+            q += f" LIMIT {int(limit)}"
+        return self.conn.execute(q, (status,)).fetchall()
+
+    def page_sha_known(self, sha256: str) -> bool:
+        """True if an image with this sha256 is already recorded anywhere
+        (extracted, delivered, or duplicate) -- exact-dup gate for pages."""
+        return self.conn.execute(
+            "SELECT 1 FROM pages WHERE sha256=? LIMIT 1", (sha256,)
+        ).fetchone() is not None
+
+    def page_phash_known(self, phash: str, distance: int,
+                         exclude_file_id: int | None = None,
+                         statuses: tuple[str, ...] = ("extracted", "delivered", "duplicate")) -> bool:
+        """True if any recorded page's phash is within `distance` bits
+        (Hamming) of this one -- near-dup gate.
+
+        `exclude_file_id`: pages of the SAME source file are never
+        compared. The client's deliverables are the individual pages of a
+        deck -- several similar-styled chart pages from ONE deck are all
+        distinct deliverables, even though their renders look alike. The
+        near-dup gate exists to catch the SAME image appearing in a
+        DIFFERENT source (two decks / two web pages), not lookalike pages
+        within one document."""
+        rows = self.conn.execute(
+            """SELECT id, file_id, phash FROM pages
+               WHERE phash IS NOT NULL AND status IN (%s)"""
+            % ",".join("?" for _ in statuses),
+            statuses,
+        ).fetchall()
+        for row in rows:
+            if exclude_file_id is not None and row["file_id"] == exclude_file_id:
+                continue
+            if hamming_distance(row["phash"], phash) <= distance:
+                return True
+        return False
+
+    def page_phash_closest(self, phash: str, exclude_file_id: int | None = None,
+                           statuses: tuple[str, ...] = ("extracted", "delivered", "duplicate")) -> tuple[str, int] | None:
+        """Return (match_phash, distance) of the closest recorded page, or
+        None when no page is within a sane bound. Used by the extract stage
+        to record WHY a page was flagged near-dup."""
+        rows = self.conn.execute(
+            """SELECT id, file_id, phash FROM pages
+               WHERE phash IS NOT NULL AND status IN (%s)"""
+            % ",".join("?" for _ in statuses),
+            statuses,
+        ).fetchall()
+        best: tuple[str, int] | None = None
+        for row in rows:
+            if exclude_file_id is not None and row["file_id"] == exclude_file_id:
+                continue
+            d = hamming_distance(row["phash"], phash)
+            if best is None or d < best[1]:
+                best = (row["phash"], d)
+        return best
 
     # ------------------------------------------------------------------
     # Domains

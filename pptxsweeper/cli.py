@@ -182,6 +182,20 @@ def classify(dry_run: bool, limit: int | None, reclassify: bool, sync_review: bo
 # ----------------------------------------------------------------------
 @main.command()
 @click.option("--dry-run", is_flag=True)
+@click.option("--limit", type=int, default=None,
+              help="Cap files extracted per pass (testing).")
+def extract(dry_run: bool, limit: int | None) -> None:
+    """Image delivery: select graphical pages from classified files and
+    render them to PNG deliverables (deduped by sha256 + perceptual hash)."""
+    cfg, reg = _boot("extract")
+    from .stages.extract_stage import ExtractStage
+    stage = ExtractStage(cfg, reg, dry_run=dry_run)
+    click.echo(json.dumps(stage.run(limit=limit), indent=2))
+
+
+# ----------------------------------------------------------------------
+@main.command()
+@click.option("--dry-run", is_flag=True)
 @click.option("--stream", is_flag=True,
               help="Upload each qualifying file to Drive immediately (no "
                    "waiting for a full batch); folders/manifests stay intact.")

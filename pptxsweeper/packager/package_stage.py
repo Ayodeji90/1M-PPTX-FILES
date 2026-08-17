@@ -29,8 +29,8 @@ from ..db.dao import Registry, utcnow
 from ..naming import BatchAllocator, manifest_filename
 from ..node import NodeIdentity
 from ..utils.hashing import sha256_file
-from .compose import (deliverable_candidates, resolve_composition,
-                       select_for_batch, Selection)
+from .compose import (deliverable_candidates, deliverable_page_candidates,
+                       resolve_composition, select_for_batch, Selection)
 from .manifest import manifest_row, metadata_record, write_manifest
 from .rclone import Rclone
 
@@ -48,9 +48,18 @@ class PackageStage:
         self.reg = reg
         self.dry_run = dry_run
         self.node = node or NodeIdentity.from_env()
+        # Image delivery mode: deliverables are extracted page PNGs (pages
+        # table) instead of whole decks (files table). Composition rules,
+        # batch naming (BATCH_NN_img_NNNNN.png), budgets and verification
+        # are unchanged -- only the unit changes. Image mode delivers into
+        # its OWN top-level Drive folder (rclone_image_root_folder) so the
+        # new phase never mixes with the deck deliveries.
+        self.image_mode = bool(cfg.raw.get("delivery", {}).get("image", False))
         rc = cfg.raw["rclone"]
+        root_folder = (cfg.rclone_image_root_folder() if self.image_mode
+                       else cfg.rclone_root_folder())
         self.rclone = rclone or Rclone(
-            bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=cfg.rclone_root_folder(),
+            bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=root_folder,
             retries=int(cfg.raw["upload"]["max_retries"]),
             retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]),
             timeout=int(rc.get("timeout_s", 900)),
@@ -82,7 +91,7 @@ class PackageStage:
                         in_flight["folder_name"], in_flight["state"])
             return self._package_batch(dict(in_flight), resume=True, force=force)
 
-        candidates = deliverable_candidates(self.reg)
+        candidates = self._candidates()
         selection = select_for_batch(candidates, self.batch_size,
                                      self.high_min_pct, self.medium_max_pct)
         self._reserve_surplus(selection)
@@ -132,7 +141,7 @@ class PackageStage:
         folder = batch["folder_name"]
 
         if resume:
-            candidates = deliverable_candidates(self.reg, batch_id=batch_id)
+            candidates = self._candidates(batch_id=batch_id)
             selection = select_for_batch(candidates, self.batch_size,
                                          self.high_min_pct, self.medium_max_pct)
             self._reserve_surplus(selection)
@@ -151,13 +160,12 @@ class PackageStage:
 
         self.allocator.set_state(batch_id, "packing")
 
-        # 1. Assign names (idempotent; skips files already named).
+        # 1. Assign names (idempotent; skips already-named units).
         for row in files:
-            ext = "pptx" if row["converted_from_ppt"] else (row["format"] or "pptx")
-            self.allocator.assign_filename(batch_id, row["id"], ext)
+            self._assign_name(batch_id, row)
 
         # Re-read with names attached.
-        candidates = deliverable_candidates(self.reg, batch_id=batch_id)
+        candidates = self._candidates(batch_id=batch_id)
         rows = [dict(c) for c in candidates if c["delivered_filename"]]
 
         # 2. Budget check (size of payloads still to upload).
@@ -206,7 +214,7 @@ class PackageStage:
 
         # 4. Manifest (regenerated deterministically every attempt).
         manifest_rows = [manifest_row(r) for r in rows]
-        manifest_path = local_batch / manifest_filename(batch_id, batch["padding_width"], self.node.node_id)
+        manifest_path = local_batch / manifest_filename(batch_id, batch["padding_width"])
         write_manifest(manifest_rows, manifest_path)
         manifest_sha = sha256_file(manifest_path)
 
@@ -222,31 +230,7 @@ class PackageStage:
         now = utcnow()
         with self.reg.tx():
             for r in rows:
-                self.reg.conn.execute(
-                    "UPDATE files SET delivered_at=?, updated_at=? WHERE id=?",
-                    (now, now, r["id"]))
-                if r["url_id"]:
-                    self.reg.conn.execute(
-                        "UPDATE urls SET status='delivered', batch_id=?, updated_at=? WHERE id=?",
-                        (batch_id, now, r["url_id"]))
-                m = manifest_row(r)
-                self.reg.conn.execute(
-                    """INSERT INTO audit_log (file_id, batch_id, delivered_filename, sha256,
-                        source_url, source_domain, download_url, original_filename, format,
-                        converted_from_ppt, slide_count, quality_class, collection_ts,
-                        download_ts, http_status, robots_status, retrieval_method,
-                        public_access_status, screen_pirate, screen_robots, screen_rights,
-                        screen_pii, screen_minors, screen_prohibited, final_status)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (r["id"], batch_id, m["delivered_filename"], m["sha256"],
-                     m["source_url"], m["source_domain"], m["download_url"],
-                     m["original_filename"], m["format"], m["converted_from_ppt"],
-                     m["slide_count"], m["quality_class"], m["collection_ts"],
-                     m["download_ts"], m["http_status"], m["robots_status"],
-                     m["retrieval_method"], m["public_access_status"],
-                     m["screen_pirate"], m["screen_robots"], m["screen_rights"],
-                     m["screen_pii"], m["screen_minors"], m["screen_prohibited"],
-                     m["final_status"]))
+                self._mark_delivered(r, batch_id, now)
         self.reg.budget_add(total_bytes)
 
         comp_ok = selection.composition_ok(self.high_min_pct, self.medium_max_pct)
@@ -261,11 +245,15 @@ class PackageStage:
         )
 
         # 7. Keep a local manifest copy, then delete payloads + build dir.
+        self.manifests_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(manifest_path, self.manifests_dir / manifest_path.name)
         for r in rows:
             if r["local_path"]:
                 Path(r["local_path"]).unlink(missing_ok=True)
-                self.reg.update_file(r["id"], local_path=None)
+                if self.image_mode:
+                    self.reg.update_page(r["id"], local_path=None)
+                else:
+                    self.reg.update_file(r["id"], local_path=None)
         shutil.rmtree(local_batch, ignore_errors=True)
 
         # 8. Registry backup to Drive.
@@ -297,7 +285,7 @@ class PackageStage:
             batch = dict(self.allocator.open_batch())
             counts = self._batch_counts(batch["batch_id"])
             capacity = self.batch_size - counts["total"]
-            candidates = deliverable_candidates(self.reg, batch_id=batch["batch_id"])
+            candidates = self._candidates(batch_id=batch["batch_id"])
 
             prepared: list[dict] = []
             budget_left = self.daily_budget - self.reg.budget_used_today()
@@ -337,9 +325,7 @@ class PackageStage:
                 if self.dry_run:
                     continue
                 if not r["delivered_filename"]:
-                    ext = "pptx" if r["converted_from_ppt"] else (r["format"] or "pptx")
-                    r["delivered_filename"] = self.allocator.assign_filename(
-                        batch["batch_id"], r["id"], ext)
+                    r["delivered_filename"] = self._assign_name(batch["batch_id"], r)
                     r["batch_id"] = batch["batch_id"]
                 dst = local_batch / r["delivered_filename"]
                 if not dst.exists():
@@ -394,24 +380,8 @@ class PackageStage:
                     log.error("size verify failed for %s; retrying next cycle", name)
                     continue
                 now = utcnow()
-                m = manifest_row(r)
                 with self.reg.tx():
-                    self.reg.conn.execute(
-                        "UPDATE files SET delivered_at=?, local_path=NULL, "
-                        "updated_at=? WHERE id=?", (now, now, r["id"]))
-                    if r["url_id"]:
-                        self.reg.conn.execute(
-                            "UPDATE urls SET status='delivered', batch_id=?, "
-                            "updated_at=? WHERE id=?",
-                            (batch["batch_id"], now, r["url_id"]))
-                    self._insert_audit(r["id"], batch["batch_id"], m)
-                    self.reg.conn.execute(
-                        """UPDATE batches SET file_count=file_count+1,
-                               high_count=high_count + (?),
-                               medium_count=medium_count + (?)
-                           WHERE batch_id=?""",
-                        (1 if r["quality"] == "HIGH" else 0,
-                         1 if r["quality"] == "MEDIUM" else 0, batch["batch_id"]))
+                    self._mark_delivered(r, batch["batch_id"], now)
                 uploaded_bytes += r["_size"]
                 r["_payload"].unlink(missing_ok=True)
                 (local_batch / name).unlink(missing_ok=True)
@@ -450,25 +420,47 @@ class PackageStage:
             >= self.max_open_days
 
     def _batch_counts(self, batch_id: int) -> dict:
-        row = self.reg.conn.execute(
-            """SELECT COUNT(*) t,
-                      SUM(CASE WHEN quality='HIGH' THEN 1 ELSE 0 END) h,
-                      SUM(CASE WHEN quality='MEDIUM' THEN 1 ELSE 0 END) m
-               FROM files WHERE batch_id=? AND delivered_at IS NOT NULL""",
-            (batch_id,)).fetchone()
+        if self.image_mode:
+            row = self.reg.conn.execute(
+                """SELECT COUNT(*) t,
+                          SUM(CASE WHEN f.quality='HIGH' THEN 1 ELSE 0 END) h,
+                          SUM(CASE WHEN f.quality='MEDIUM' THEN 1 ELSE 0 END) m
+                   FROM pages p JOIN files f ON f.id = p.file_id
+                   WHERE p.batch_id=? AND p.delivered_at IS NOT NULL""",
+                (batch_id,)).fetchone()
+        else:
+            row = self.reg.conn.execute(
+                """SELECT COUNT(*) t,
+                          SUM(CASE WHEN quality='HIGH' THEN 1 ELSE 0 END) h,
+                          SUM(CASE WHEN quality='MEDIUM' THEN 1 ELSE 0 END) m
+                   FROM files WHERE batch_id=? AND delivered_at IS NOT NULL""",
+                (batch_id,)).fetchone()
         return {"total": row["t"] or 0, "high": row["h"] or 0, "medium": row["m"] or 0}
 
     def _finalize_streamed(self, batch: dict, counts: dict) -> None:
         batch_id = batch["batch_id"]
         folder = batch["folder_name"]
-        rows = [dict(x) for x in self.reg.conn.execute(
-            """SELECT f.*, u.url AS source_url, u.domain AS source_domain,
-                      u.created_at AS collection_ts, u.http_status, u.robots_status,
-                      u.retrieval_method, u.metadata AS url_metadata
-               FROM files f LEFT JOIN urls u ON u.id = f.url_id
-               WHERE f.batch_id=? AND f.delivered_filename IS NOT NULL
-                 AND f.delivered_at IS NOT NULL""", (batch_id,))]
-        manifest_path = self.manifests_dir / manifest_filename(batch_id, batch["padding_width"], self.node.node_id)
+        if self.image_mode:
+            rows = [dict(x) for x in self.reg.conn.execute(
+                """SELECT p.*, p.sha256 AS image_sha256,
+                          f.quality, f.original_filename, f.sha256 AS source_file_sha256,
+                          u.url AS source_url, u.domain AS source_domain,
+                          u.created_at AS collection_ts, u.http_status, u.robots_status,
+                          u.retrieval_method, u.metadata AS url_metadata
+                   FROM pages p
+                   JOIN files f ON f.id = p.file_id
+                   LEFT JOIN urls u ON u.id = f.url_id
+                   WHERE p.batch_id=? AND p.delivered_filename IS NOT NULL
+                     AND p.delivered_at IS NOT NULL""", (batch_id,))]
+        else:
+            rows = [dict(x) for x in self.reg.conn.execute(
+                """SELECT f.*, u.url AS source_url, u.domain AS source_domain,
+                          u.created_at AS collection_ts, u.http_status, u.robots_status,
+                          u.retrieval_method, u.metadata AS url_metadata
+                   FROM files f LEFT JOIN urls u ON u.id = f.url_id
+                   WHERE f.batch_id=? AND f.delivered_filename IS NOT NULL
+                     AND f.delivered_at IS NOT NULL""", (batch_id,))]
+        manifest_path = self.manifests_dir / manifest_filename(batch_id, batch["padding_width"])
         write_manifest([manifest_row(r) for r in rows], manifest_path)
         manifest_sha = sha256_file(manifest_path)
         self.rclone.copy_file(manifest_path, folder)
@@ -496,8 +488,10 @@ class PackageStage:
                 converted_from_ppt, slide_count, quality_class, collection_ts,
                 download_ts, http_status, robots_status, retrieval_method,
                 public_access_status, screen_pirate, screen_robots, screen_rights,
-                screen_pii, screen_minors, screen_prohibited, final_status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                screen_pii, screen_minors, screen_prohibited,
+                page_index, image_sha256, phash, source_file_sha256, extraction_method,
+                final_status)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (file_id, batch_id, m["delivered_filename"], m["sha256"],
              m["source_url"], m["source_domain"], m["download_url"],
              m["original_filename"], m["format"], m["converted_from_ppt"],
@@ -506,7 +500,53 @@ class PackageStage:
              m["retrieval_method"], m["public_access_status"],
              m["screen_pirate"], m["screen_robots"], m["screen_rights"],
              m["screen_pii"], m["screen_minors"], m["screen_prohibited"],
+             m["page_index"], m["image_sha256"], m["phash"],
+             m["source_file_sha256"], m["extraction_method"],
              m["final_status"]))
+
+    # ------------------------------------------------------------------
+    def _candidates(self, batch_id: int | None = None) -> list:
+        """Deliverable units for this mode: page images (image mode) or
+        whole decks (deck mode)."""
+        if self.image_mode:
+            return deliverable_page_candidates(self.reg, batch_id=batch_id)
+        return deliverable_candidates(self.reg, batch_id=batch_id)
+
+    def _assign_name(self, batch_id: int, r: dict) -> str:
+        """Assign the next contract filename in this batch for the unit
+        (page or file): BATCH_NN_img_NNNNN.png (image) or
+        BATCH_NN_file_NNNNN.{pptx,pdf} (deck). Idempotent."""
+        if self.image_mode:
+            return self.allocator.assign_page_filename(batch_id, r["id"], "png",
+                                                        prefix="img")
+        ext = "pptx" if r["converted_from_ppt"] else (r["format"] or "pptx")
+        return self.allocator.assign_filename(batch_id, r["id"], ext)
+
+    def _mark_delivered(self, r: dict, batch_id: int, now: str) -> None:
+        """Mark one delivered unit (page or file) + its url + audit row.
+        Runs inside the caller's transaction."""
+        if self.image_mode:
+            self.reg.conn.execute(
+                "UPDATE pages SET delivered_at=?, local_path=NULL, updated_at=? WHERE id=?",
+                (now, now, r["id"]))
+            file_id = r.get("file_id")
+        else:
+            self.reg.conn.execute(
+                "UPDATE files SET delivered_at=?, updated_at=? WHERE id=?",
+                (now, now, r["id"]))
+            file_id = r["id"]
+        if r["url_id"]:
+            self.reg.conn.execute(
+                "UPDATE urls SET status='delivered', batch_id=?, updated_at=? WHERE id=?",
+                (batch_id, now, r["url_id"]))
+        self._insert_audit(file_id, batch_id, manifest_row(r))
+        self.reg.conn.execute(
+            """UPDATE batches SET file_count=file_count+1,
+                   high_count=high_count + (?),
+                   medium_count=medium_count + (?)
+               WHERE batch_id=?""",
+            (1 if r["quality"] == "HIGH" else 0,
+             1 if r["quality"] == "MEDIUM" else 0, batch_id))
 
     # ------------------------------------------------------------------
     def _write_metadata_sidecar(self, local_batch: Path, r: dict) -> None:
@@ -531,9 +571,13 @@ class PackageStage:
         for r in rows:
             if r["delivered_filename"] in missing and r["url_id"]:
                 self.reg.update_url(r["url_id"], status="discovered")
-                self.reg.update_file(r["id"], local_path=None)
+                if self.image_mode:
+                    self.reg.update_page(r["id"], local_path=None)
+                else:
+                    self.reg.update_file(r["id"], local_path=None)
+        unit = "images" if self.image_mode else "files"
         self.reg.log_event("payload_missing", None,
-                           f"batch {batch_id}: {len(missing)} files requeued")
+                           f"batch {batch_id}: {len(missing)} {unit} requeued")
 
     # ------------------------------------------------------------------
     def backup_registry(self) -> Path:

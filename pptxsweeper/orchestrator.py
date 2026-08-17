@@ -246,6 +246,12 @@ class Orchestrator:
                                    .get("review_auto_promote_hours", 2)) * 3600
         while not self.stop.is_set():
             self._stage("classify", "classify")
+            # Image delivery: extract graphical pages -> PNG before packing.
+            # In deck mode this is a no-op (extract finds no classified
+            # files without pages... it finds DELIVER files but the pages
+            # table stays empty; gate on config so deck VMs skip the stage).
+            if bool(self.cfg.raw.get("delivery", {}).get("image", False)):
+                self._stage("extract", "extract")
             # Auto-promote manually-approved review backlog on an interval;
             # the package --stream below then delivers them this cycle.
             if promote_interval_s > 0 and time.time() - last_promote > promote_interval_s:
