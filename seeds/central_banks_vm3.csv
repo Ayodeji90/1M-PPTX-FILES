@@ -1,0 +1,48 @@
+name,domain,method
+# VM3's tier-4 monetary-authority seeds -- ENTIRELY DISJOINT from VM1's
+# central_banks.csv (~100 national central banks) and VM2's
+# central_banks_vm2.csv (regional/multinational institutions). VM3 owns
+# the sovereign wealth funds and development-finance institutions.
+# Best-effort sitemap walk; unreachable sources yield nothing, never error.
+Central Bank of Ireland,centralbank.ie,sitemap
+Bank of Greece,bankofgreece.gr,sitemap
+Bank of Portugal,bportugal.pt,sitemap
+National Bank of Slovakia,nbs.sk,sitemap
+Bank of Slovenia,bsi.si,sitemap
+Croatian National Bank,hnb.hr,sitemap
+National Bank of Serbia,nbs.rs,sitemap
+Central Bank of Bosnia,CBBH.ba,sitemap
+National Bank of North Macedonia,nbrm.mk,sitemap
+National Bank of Moldova,bnm.md,sitemap
+National Bank of Georgia,nbg.gov.ge,sitemap
+Central Bank of Armenia,cba.am,sitemap
+Bank of Israel,boi.org.il,sitemap
+Central Bank of Jordan,cbj.gov.jo,sitemap
+Central Bank of Kuwait,cbk.gov.kw,sitemap
+Qatar Central Bank,qcb.gov.qa,sitemap
+Central Bank of Oman,cbo.gov.om,sitemap
+Brunei Darussalam Central Bank,bdcb.gov.bn,sitemap
+Bank of Korea,bok.or.kr,sitemap
+Hong Kong Monetary Authority,hkma.gov.hk,sitemap
+Central Bank of the Republic of China (Taiwan),cbc.gov.tw,sitemap
+Bangko Sentral ng Pilipinas,bsp.gov.ph,sitemap
+State Bank of Vietnam,sbv.gov.vn,sitemap
+Central Bank of Sri Lanka,cbsl.gov.lk,sitemap
+Bangladesh Bank,bb.org.bd,sitemap
+State Bank of Pakistan,sbp.org.pk,sitemap
+Bank of Canada,bankofcanada.ca,sitemap
+Reserve Bank of Australia,rba.gov.au,sitemap
+Reserve Bank of New Zealand,rbnz.govt.nz,sitemap
+South African Reserve Bank,resbank.co.za,sitemap
+Central Bank of Nigeria,cbn.gov.ng,sitemap
+Central Bank of Kenya,centralbank.go.ke,sitemap
+Central Bank of Egypt,cbe.org.eg,sitemap
+National Treasury of South Africa,treasury.gov.za,sitemap
+Abu Dhabi Investment Authority,adia.ae,sitemap
+Qatar Investment Authority,qia.gov.qa,sitemap
+Kuwait Investment Authority,kia.gov.kw,sitemap
+Saudi Public Investment Fund,pif.gov.sa,sitemap
+Malaysia Petroleum Resources Corporation,petronas.com,sitemap
+Temasek Holdings,temasek.com.sg,sitemap
+GIC Private Limited,gic.com.sg,sitemap
+Khazanah Nasional,khazanah.com.my,sitemap

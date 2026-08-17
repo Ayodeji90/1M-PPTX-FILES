@@ -1,0 +1,192 @@
+########################################################################
+# VM3 profile overlay (4 vCPU / 16 GiB -- Azure Standard_D4ads_v7).
+#
+# VM3 is the SECOND CONSUMER node (node_id=2): it imports its OWN share
+# of VM1's discovered URLs via the Drive handoff folder (the producer
+# partitions URLs by hash so VM2 and VM3 never receive the same URL) and
+# delivers to its OWN Drive account / folder. It ALSO hunts its own URLs
+# from ENTIRELY DIFFERENT sources (see the harvesters.* overrides +
+# seeds/cdx_domains_vm3.txt, seeds/sources_vm3/, seeds/central_banks_vm3.csv,
+# seeds/global_tickers_vm3.csv), but those self-sourced URLs stay on
+# STANDBY: download.handoff_first keeps the downloader on the handed-off
+# queue until it drains, then it starts on VM3's own harvest.
+#
+# Run as:  pptxsweeper run --tiers 1,2,3,4,7 --handoff consumer
+#   (tier 5 OCW belongs to VM2; tier 6 repo APIs belong to VM1. VM3 owns
+#   tiers 1,2,3,4,7 with its own seed universe -- see below.)
+#
+# .env on VM3:  NODE_ID=2  NODE_COUNT=1   (owns 100% of ITS OWN disjoint
+#   seed set; handoff CSV prefix node2_ never collides with VM2's node1_
+#   or VM1's node0_).
+#
+# Drive: VM3 uses a SEPARATE Google Drive account for deliveries
+#   (RCLONE_REMOTE=gdrive  -> its own account, RCLONE_ROOT_FOLDER=
+#   PptxSweeper_Delivery_VM3). The handoff exchange still happens on the
+#   SHARED account, so RCLONE_HANDOFF_REMOTE points at a second remote
+#   ("shared") authenticated against VM1's account -- see cli._rclone_handoff.
+#
+# Loaded via `PPTXSWEEPER_OVERRIDE=config.vm3.yaml`. Only the knobs that
+# differ from config.yaml are listed -- everything else inherits the
+# base config.
+########################################################################
+
+download:
+  concurrency: 64
+  max_downloaded_backlog: 3000
+  min_free_disk_gb: 10
+  min_free_ram_gb: 2.5
+  # CONSUMER PRIORITY: while ANY handoff-discovered URL is pending, only
+  # claim handoff rows -- this node's own harvested URLs stay on standby
+  # until the handed-off queue drains (see dao.claim_urls handoff_first).
+  handoff_first: true
+
+disk:
+  hard_min_free_gb: 4
+  reclaim_max_age_h: 24
+
+classify:
+  workers: 4               # 4 vCPU -> 4 quality-engine workers
+  worker_memory_mb: 512
+  chunk_limit: 100
+  review_dir_cap_gb: 8
+  watchdog_stall_min: 10
+
+conversion:
+  max_concurrent: 2
+  timeout_s: 180
+
+# ----------------------------------------------------------------------
+# VM3's OWN sources -- entirely disjoint from BOTH VM1 and VM2.
+# VM1 uses seeds/cdx_domains.txt + seeds/sources/ + tier3 US fed set;
+# VM2 uses seeds/*_vm2.* + its tier3 US agencies. VM3's lists below
+# overlap neither.
+# ----------------------------------------------------------------------
+harvesters:
+  tier1:
+    # Wayback CDX sweep of VM3's own domain universe: EU/UK/Asia-Pacific
+    # universities + multilateral development banks (see the file header).
+    domain_seeds_file: ./seeds/cdx_domains_vm3.txt
+  tier2:
+    # IR decks from a THIRD ticker universe (EMEA/Asia blue chips),
+    # disjoint from VM1's S&P 1500 and VM2's global list.
+    seed_tickers_file: ./seeds/global_tickers_vm3.csv
+  tier3:
+    # Canadian / Australian / African federal agencies + EM central
+    # banks -- VM1 owns the US Fed set, VM2 owns US agencies.
+    sitemap_domains:
+      - canada.ca
+      - apec.gc.ca
+      - fin.gc.ca
+      - pch.gc.ca
+      - ic.gc.ca
+      - nrc-cnrc.gc.ca
+      - statcan.gc.ca
+      - aadnc-aandc.gc.ca
+      - dfat-maeci.gc.ca
+      - hc-sc.gc.ca
+      - scc-ccn.gc.ca
+      - cbpp-pcpe.gc.ca
+      - parl.gc.ca
+      - senedd.wales
+      - parliament.uk
+      - gov.scot
+      - dfat.gov.au
+      - industry.gov.au
+      - education.gov.au
+      - health.gov.au
+      - abs.gov.au
+      - asic.gov.au
+      - rba.gov.au
+      - apra.gov.au
+      - treasury.gov.au
+      - finance.gov.au
+      - homeaffairs.gov.au
+      - environment.gov.au
+      - agriculture.gov.au
+      - pmc.gov.au
+      - csiro.au
+      - nsw.gov.au
+      - vic.gov.au
+      - qld.gov.au
+      - sa.gov.au
+      - wa.gov.au
+      - tas.gov.au
+      - nt.gov.au
+      - act.gov.au
+      - govt.nz
+      - mbie.govt.nz
+      - education.govt.nz
+      - health.govt.nz
+      - rbnz.govt.nz
+      - stats.govt.nz
+      - dpmc.govt.nz
+      - gov.za
+      - treasury.gov.za
+      - education.gov.za
+      - health.gov.za
+      - dhet.gov.za
+      - csir.co.za
+      - resbank.co.za
+      - gov.ng
+      - education.gov.ng
+      - cbn.gov.ng
+      - nigerianstat.gov.ng
+      - gov.ke
+      - education.go.ke
+      - centralbank.go.ke
+      - knbs.or.ke
+      - gov.eg
+      - cbe.org.eg
+      - moe.gov.eg
+      - sis.gov.eg
+    fed_regional_banks: []
+  tier4:
+    # THIRD source universe: UN agencies + think tanks + regional bodies
+    # VM1/VM2 do not crawl (disjoint from seeds/sources and seeds/sources_vm2).
+    generic_sources_dir: ./seeds/sources_vm3
+    central_banks_seed: ./seeds/central_banks_vm3.csv
+  tier7:
+    govdata:
+      # A THIRD set of national open-data portals (VM1 owns EU/US/UA/RO/
+      # LV/AR/CL/IL/SI; VM2 owns IN/NZ/MX/MY/SA/BH/BR/IT/NL/AU/UY).
+      ckan_portals:
+        - "https://data.gov.ie"             # Ireland
+        - "https://data.gov.gr"             # Greece
+        - "https://data.gov.pt"             # Portugal
+        - "https://data.gov.sk"             # Slovakia
+        - "https://data.gov.si"             # Slovenia
+        - "https://data.gov.hr"             # Croatia
+        - "https://data.gov.rs"             # Serbia
+        - "https://data.gov.ba"             # Bosnia
+        - "https://data.gov.mk"             # North Macedonia
+        - "https://data.gov.md"             # Moldova
+        - "https://data.gov.ge"             # Georgia
+        - "https://data.gov.am"             # Armenia
+        - "https://data.gov.il"             # Israel
+        - "https://data.gov.jo"             # Jordan
+        - "https://data.gov.kw"             # Kuwait
+        - "https://data.gov.qa"             # Qatar
+        - "https://data.gov.om"             # Oman
+        - "https://data.gov.bn"             # Brunei
+        - "https://data.gov.kr"             # South Korea
+        - "https://data.gov.hk"             # Hong Kong
+        - "https://data.gov.tw"             # Taiwan
+        - "https://data.gov.ph"             # Philippines
+        - "https://data.gov.vn"             # Vietnam
+        - "https://data.gov.lk"             # Sri Lanka
+        - "https://data.gov.bd"             # Bangladesh
+        - "https://data.gov.pk"             # Pakistan
+    standards:
+      # THIRD standards/autoindex universe (VM1 owns 3GPP/IETF/OASIS/
+      # open-std/ieee802; VM2 owns ETSI/ITU/3GPP2/unicode/W3C).
+      autoindex_roots:
+        - "https://www.ansi.org/"
+        - "https://www.iso.org/obp/ui/"
+        - "https://www.iec.ch/webstore/"
+        - "https://www.itu.int/rec/"
+        - "https://www.atis.org/"
+        - "https://www.sae.org/standards/"
+        - "https://www.astm.org/products-services/standards-and-publications.html"
+        - "https://www.cenelec.eu/dyn/www/f?p=104:110:"
+        - "https://www.bsigroup.com/en-GB/standards/"
+        - "https://standards.iso.org/ittf/PubliclyAvailableStandards/"

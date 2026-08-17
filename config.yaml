@@ -427,6 +427,11 @@ multi_node:
   # Work is split across machines by hash(domain) % NODE_COUNT == NODE_ID
   # (NODE_ID / NODE_COUNT come from .env). Guarantees a domain -- and
   # therefore a URL -- is only ever processed by one machine.
+  # Consumer node ids (the PRODUCER's consumers). Each export run writes
+  # one disjoint CSV per consumer: bucket(url) % len(consumers) == index,
+  # so VM2 (node1) and VM3 (node2) never receive the same URL. Leave
+  # empty for the legacy single-consumer export.
+  consumer_node_ids: [1, 2]
   dedup_folder: _dedup            # on Drive, under the delivery root
   dedup_sync_interval_min: 60     # upload own hashes / import peers' hashes
   # Producer->consumer URL handoff (a download-only VM that takes a share

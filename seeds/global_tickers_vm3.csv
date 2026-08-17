@@ -1,0 +1,152 @@
+ticker,company,website
+# Tier 2 IR seed list for VM3 -- ENTIRELY DISJOINT from VM1's
+# sp1500_tickers.csv (US universe) and VM2's global_tickers_vm2.csv.
+# VM3 probes the IR pages of EMEA/Asia blue chips for investor-deck
+# .ppt/.pptx files. Best-effort: a company with no reachable IR pages
+# simply yields nothing.
+SHEL,Shell plc,shell.com
+TOT,TotalEnergies SE,totalenergies.com
+BP.,BP p.l.c.,bp.com
+ENI,Eni S.p.A.,eni.com
+EQNR,Equinor ASA,equinor.com
+REP,Repsol S.A.,repsol.com
+GALP,Galp Energia,galp.com
+OMV,OMV AG,omv.com
+NOVO_B,Novo Nordisk A/S,novonordisk.com
+AZN,AstraZeneca plc,astrazeneca.com
+GSK,GSK plc,gsk.com
+NVO,Novo Nordisk,novonordisk.com
+ROG,Roche Holding AG,roche.com
+NOVN,Novartis AG,novartis.com
+CFR,Compagnie Financiere Richemont,richemont.com
+NESN,Nestle S.A.,nestle.com
+ABBN,ABB Ltd,abb.com
+SIKA,Sika AG,sika.com
+LONN,Lonza Group AG,lonza.com
+SAN,Sanofi,sanofi.com
+AIR,Airbus SE,airbus.com
+DHL,DHL Group,dhl.com
+SAP,SAP SE,sap.com
+SIE,Siemens AG,siemens.com
+ALV,Allianz SE,allianz.com
+MUV2,Munich Re,munichre.com
+BAS,BASF SE,basf.com
+BAYN,Bayer AG,bayer.com
+DAI,Daimler Truck,daimlertruck.com
+BMW,BMW AG,bmwgroup.com
+VOW3,Volkswagen AG,volkswagenag.com
+MBG,Mercedes-Benz Group,mercedes-benz.com
+DTE,Deutsche Telekom,telekom.com
+IFX,Infineon Technologies,infineon.com
+ADS,adidas AG,adidas-group.com
+HEI,Heidelberg Materials,heidelbergmaterials.com
+EOAN,E.ON SE,eon.com
+RWE,RWE AG,rwe.com
+ENEL,Enel S.p.A.,enel.com
+ISP,Intesa Sanpaolo,intesasanpaolo.com
+UCG,UniCredit S.p.A.,unicreditgroup.eu
+G,Mgenerali,generali.com
+LDO,Leonardo S.p.A.,leonardo.com
+STLA,Stellantis N.V.,stellantis.com
+FMNB,Finmeccanica,leonardo.com
+BBVA,Banco Bilbao Vizcaya Argentaria,bbva.com
+SAN,Banco Santander,santander.com
+IBE,Iberdrola S.A.,iberdrola.com
+TEF,Telefonica S.A.,telefonica.com
+FER,Ferrovial S.A.,ferrovial.com
+ACS,ACS Group,grupacs.com
+ITX,Industria de Diseno Textil,inditex.com
+AENA,Aena S.M.E. SA,aena.es
+DSY,Dassault Systemes SE,3ds.com
+OR,L'Oreal,loreal.com
+MC,LVMH Moet Hennessy,lvmh.com
+KER,Kering,kering.com
+EL,EssilorLuxottica,essilorluxottica.com
+SU,Schneider Electric,se.com
+BNP,BNP Paribas,group.bnpparibas
+GLE,Societe Generale,societegenerale.com
+ACA,Crédit Agricole,credit-agricole.com
+CS,AXA,axa.com
+CNP,CNP Assurances,cnp.fr
+VIE,Veolia,veolia.com
+ENGI,Engie,engie.com
+EDF,EDF,edf.fr
+UL,Unilever plc,unilever.com
+REL,RELX plc,relx.com
+BATS,British American Tobacco,bat.com
+DGE,Diageo plc,diageo.com
+ABF,Associated British Foods,abf.co.uk
+BT.A,BT Group,bt.com
+VOD,Vodafone Group,vodafone.com
+EXPN,Experian plc,experian.com
+IHG,InterContinental Hotels Group,ihgplc.com
+RB.,Reckitt Benckiser,reckitt.com
+CCH,Coca-Cola HBC,cocacolahbc.com
+LLOY,LLoyds Banking Group,lloydsbankinggroup.com
+HSBA,HSBC Holdings,hsbc.com
+STAN,Standard Chartered,sc.com
+BARC,Barclays plc,home.barclays
+NWG,NatWest Group,natwestgroup.com
+LGEN,Legal & General,legalandgeneral.com
+AV.,Aviva plc,aviva.com
+PRU,Prudential plc,prudentialplc.com
+MNG,Man Group,man.com
+AAL,Anglo American,angloamerican.com
+RIO,Rio Tinto,riotinto.com
+GLEN,Glencore,glencore.com
+ANTO,Antofagasta plc,antofagasta.co.uk
+BHP,BHP Group,bhp.com
+FERG,Ferguson plc,fergusonplc.com
+CRH,CRH plc,crh.com
+SMIN,Smiths Group,smiths.com
+RSA,Rolls-Royce Holdings,rolls-royce.com
+BA.,BAE Systems,baesystems.com
+RR.,Rolls-Royce,rolls-royce.com
+EAS,J Sainsbury,sainsburys.co.uk
+TSCO,Tesco plc,tescoplc.com
+MKS,Marks & Spencer,marksandspencer.com
+JD.,JD Sports Fashion,jdplc.com
+NXT,Next plc,nextplc.co.uk
+PSON,Pearson plc,plc.pearson.com
+INF,Informa plc,informa.com
+WPP,WPP plc,wpp.com
+OML,Old Mutual,oldmutual.com
+NMC,NN Group,nn-group.com
+INGA,ING Groep,ing.com
+PHIA,Philips,philips.com
+ASML,ASML Holding,asml.com
+ADYEN,Adyen,adyen.com
+HEIA,Heineken N.V.,heineken.com
+KPN,KPN,kpn.com
+AKZA,AkzoNobel,akzonobel.com
+DSM,DSM Firmenich,dsm-firmenich.com
+IMB,Imperial Brands,imperialbrandsplc.com
+RIO2,Rio Tinto,riotinto.com
+ERIC,Telefonaktiebolaget LM Ericsson,ericsson.com
+VOLV,Volvo AB,volvogroup.com
+ATCO,Atlas Copco,atlascopgroup.com
+ASSA,B,Assa Abloy,assaabloy.com
+SKF,SKF,skf.com
+SAND,AB Sandvik,sandvik.com
+ELUX,B,Electrolux,electroluxgroup.com
+SEB,A,Skandinaviska Enskilda Banken,sebgroup.com
+SHB,A,Svenska Handelsbanken,handelsbanken.com
+SWED,A,Swedbank,swedbank.com
+NORDR,AB, Nordea Bank,nordea.com
+DANSKE,Danske Bank,danskebank.com
+NDA,FI,Nordea,nordea.com
+UMI,BB,Umicore,umicore.com
+SOLB,Solvay,solvay.com
+UCB,UCB,ucb.com
+COLR,Colruyt,colruytgroup.com
+ABI,Anheuser-Busch InBev,ab-inbev.com
+PIRR,Piaggio,piaggiogroup.com
+FNC,Fincantieri,fincantieri.com
+TTE,TotalEnergies,totalenergies.com
+GASI,Galp Energia,galp.com
+SRG,Snam,snam.it
+TRN,Terna,terna.it
+ERG,ERG S.p.A.,erg.eu
+AC,Acciona,acciona.com
+GRF,Grifols,grifols.com
+DOM,Domino's Pizza Group,dominosgroup.co.uk

@@ -2,14 +2,16 @@
 
 VM1 (producer) discovers URLs; a deterministic fraction of its
 `discovered` backlog is exported to a CSV and marked locally so VM1 never
-downloads them. VM2 (consumer) imports that CSV into its own registry and
-downloads/validates/delivers to its own Drive folder -- without running
-any harvesters.
+downloads them. Consumers (VM2, VM3, ...) import those CSVs into their
+own registries and download/validate/deliver to their own Drive folders
+-- without running any harvesters.
 
-Selection is by a stable hash of the URL, so the same fraction always
-goes to the consumer and repeated exports never re-hand the same URL
-(handed-off rows leave the 'discovered' pool). Exchange goes through a
-Drive `_handoff/` folder so it needs no direct machine-to-machine link.
+Selection is by a stable hash of the URL. With `n_consumers` consumers,
+URLs are partitioned by `bucket(url) % n_consumers == node_id`, so every
+consumer gets a DISJOINT share: the same URL is handed to exactly one
+machine. Repeated exports never re-hand the same URL (handed-off rows
+leave the 'discovered' pool). Exchange goes through a Drive `_handoff/`
+folder so it needs no direct machine-to-machine link.
 """
 from __future__ import annotations
 
@@ -33,10 +35,16 @@ def _bucket(url: str) -> int:
 
 
 def export_urls(reg: Registry, fraction: float, out_path: str | Path,
-                limit: int | None = None) -> dict:
-    """Write the consumer's share of the discovered backlog to a CSV and
+                limit: int | None = None, node_id: int = 0,
+                n_consumers: int = 1) -> dict:
+    """Write one consumer's share of the discovered backlog to a CSV and
     mark those rows handed-off (status='filtered_out', reason='handed_off')
-    so the producer stops considering them for download."""
+    so the producer stops considering them for download.
+
+    With multiple consumers (`n_consumers > 1`) the URL space is split by
+    `bucket(url) % n_consumers == node_id`, so each consumer receives a
+    disjoint share and no URL is ever handed to two machines.
+    """
     threshold = max(0, min(_BUCKETS, round(fraction * _BUCKETS)))
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,7 +53,9 @@ def export_urls(reg: Registry, fraction: float, out_path: str | Path,
         "SELECT id, url, domain, tier, discovery_source, metadata "
         "FROM urls WHERE status='discovered' ORDER BY id"
     ).fetchall()
-    selected = [r for r in rows if _bucket(r["url"]) < threshold]
+    selected = [r for r in rows
+                if _bucket(r["url"]) < threshold
+                and _bucket(r["url"]) % n_consumers == node_id]
     if limit:
         selected = selected[:limit]
 

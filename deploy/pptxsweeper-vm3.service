@@ -1,0 +1,56 @@
+# PptxSweeper systemd service for the THIRD Azure VM (Standard_D4ads_v7,
+# 4 vCPU / 16 GiB) running as the SECOND CONSUMER node.
+#
+# It imports ITS OWN share of VM1's discovered URLs from the shared Drive
+# handoff folder (the producer partitions URLs by hash across consumers,
+# so VM2 and VM3 never receive the same URL) AND hunts its own URLs from
+# entirely different sources (see config.vm3.yaml + seeds/*_vm3.*). Its
+# own harvest stays on STANDBY: download.handoff_first keeps the
+# downloader on the handed-off queue until it drains, then it works
+# through VM3's own URLs.
+#
+# Deliveries go to VM3's OWN Google Drive account:
+#   RCLONE_REMOTE=gdrive            -> VM3's own account (authenticated on
+#                                      this machine only)
+#   RCLONE_ROOT_FOLDER=PptxSweeper_Delivery_VM3
+#   RCLONE_HANDOFF_REMOTE=shared    -> the SHARED account (VM1's), used
+#                                      only for the handoff exchange
+#
+# Tiers 1,2,3,4,7 -- tier 5 (OCW) is VM2-only, tier 6 (repo APIs) is
+# VM1-only, so the three machines never harvest the same API or domain.
+# Discovery re-runs every 12h.
+#
+# Install:
+#   sudo cp deploy/pptxsweeper-vm3.service /etc/systemd/system/pptxsweeper.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pptxsweeper
+
+[Unit]
+Description=PptxSweeper million-scale .ppt/.pptx acquisition pipeline (VM3 consumer #2)
+Documentation=https://github.com/Ayodeji90/1M-PPTX-FILES
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/1M-PPTX-FILES
+Environment=PPTXSWEEPER_OVERRIDE=config.vm3.yaml
+EnvironmentFile=/home/azureuser/1M-PPTX-FILES/.env
+ExecStart=/home/azureuser/1M-PPTX-FILES/.venv/bin/pptxsweeper run --tiers 1,2,3,4,7 --harvest-interval-hours 12 --handoff consumer
+Restart=always
+RestartSec=30
+KillSignal=SIGTERM
+TimeoutStopSec=120
+LimitNOFILE=65536
+LimitNPROC=1024
+# MEMORY ARMOR: 16 GiB box. The cgroup caps convert a RAM spike into a
+# clean service restart instead of an OS-level swap-thrash wedge.
+MemoryHigh=12G
+MemoryMax=14G
+MemorySwapMax=1G
+OOMPolicy=kill
+
+[Install]
+WantedBy=multi-user.target

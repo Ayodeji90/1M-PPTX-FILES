@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 
@@ -51,11 +52,17 @@ def _rclone(cfg: Config):
 
 def _rclone_handoff(cfg: Config):
     """Rclone rooted at the FIXED, shared handoff folder (independent of
-    each VM's own delivery root) so producer and consumer meet there."""
+    each VM's own delivery root) so producer and consumer meet there.
+
+    The handoff lives on the PRODUCER's Drive account. A consumer with its
+    OWN separate Drive (e.g. VM3) can point RCLONE_HANDOFF_REMOTE at the
+    shared account while RCLONE_REMOTE stays its own delivery account.
+    """
     from .packager.rclone import Rclone
     rc = cfg.raw["rclone"]
     root = cfg.raw["multi_node"].get("handoff_root", "PptxSweeper_Handoff")
-    return Rclone(bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=root,
+    remote = os.environ.get("RCLONE_HANDOFF_REMOTE", cfg.rclone_remote())
+    return Rclone(bin=rc["bin"], remote=remote, root_folder=root,
                   retries=int(cfg.raw["upload"]["max_retries"]),
                   retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]),
                   timeout=int(rc.get("timeout_s", 900)))
@@ -269,30 +276,56 @@ def promote_review_cmd(stream: bool, quality_only: bool, from_drive: bool,
 # ----------------------------------------------------------------------
 @main.command("export-urls")
 @click.option("--fraction", type=float, default=0.6, show_default=True,
-              help="Share of the discovered backlog to hand to the consumer node.")
+              help="Share of the discovered backlog to hand to the consumer nodes.")
 @click.option("--out", "out_path", default=None,
-              help="Local CSV path (default: data/tmp_downloads/_handoff/<node>_<ts>.csv).")
+              help="Local CSV path for a single-consumer export (default: auto).")
 @click.option("--limit", type=int, default=None, help="Cap exported rows (testing).")
 @click.option("--to-drive/--no-to-drive", default=True,
-              help="Also upload the CSV to the Drive _handoff/ folder (default).")
+              help="Also upload the CSVs to the Drive _handoff/ folder (default).")
 def export_urls_cmd(fraction: float, out_path: str | None, limit: int | None,
                     to_drive: bool) -> None:
     """Producer: hand a deterministic fraction of discovered URLs to the
-    consumer node (marks them handed-off so THIS node won't download them)."""
+    consumer node(s) (marks them handed-off so THIS node won't download
+    them). With multiple consumers configured (multi_node.consumer_node_ids)
+    one disjoint CSV per consumer is written -- `bucket(url) % n == node_id`
+    guarantees no URL is handed to two machines."""
     cfg, reg = _boot("export_urls")
-    node = NodeIdentity.from_env()
-    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    name = f"node{node.node_id}_{ts}.csv"
-    if out_path is None:
-        out_path = str(cfg.path("paths", "download_tmp_dir") / "_handoff" / name)
     from .stages.handoff import export_urls
-    stats = export_urls(reg, fraction=fraction, out_path=out_path, limit=limit)
-    if to_drive and stats["exported"]:
-        rc = _rclone_handoff(cfg)
+    consumers = list(cfg.raw.get("multi_node", {}).get("consumer_node_ids") or [])
+    n_consumers = max(1, len(consumers))
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    rc = _rclone_handoff(cfg) if to_drive else None
+    if rc:
         rc.mkdir()
-        rc.copy_file(Path(out_path), dest_name=name)
-        stats["drive"] = f"{cfg.raw['multi_node'].get('handoff_root')}/{name}"
-    click.echo(json.dumps(stats, indent=2))
+    if out_path is None:
+        out_dir = cfg.path("paths", "download_tmp_dir") / "_handoff"
+    else:
+        out_dir = Path(out_path).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    totals = {"consumers": len(consumers), "exports": [], "total": 0}
+    for i, consumer_id in enumerate(consumers):
+        name = f"node{consumer_id}_{ts}.csv"
+        stats = export_urls(reg, fraction=fraction, out_path=out_dir / name,
+                            limit=limit, node_id=i, n_consumers=n_consumers)
+        if rc and stats["exported"]:
+            rc.copy_file(out_dir / name, dest_name=name)
+            stats["drive"] = f"{cfg.raw['multi_node'].get('handoff_root')}/{name}"
+        stats["node_id"] = consumer_id
+        totals["exports"].append(stats)
+        totals["total"] += stats["exported"]
+    if not consumers:
+        # Backward-compatible single-consumer export (no split).
+        node = NodeIdentity.from_env()
+        name = f"node{node.node_id}_{ts}.csv"
+        stats = export_urls(reg, fraction=fraction, out_path=out_dir / name,
+                            limit=limit)
+        if rc and stats["exported"]:
+            rc.copy_file(out_dir / name, dest_name=name)
+            stats["drive"] = f"{cfg.raw['multi_node'].get('handoff_root')}/{name}"
+        totals["exports"].append(stats)
+        totals["total"] += stats["exported"]
+    click.echo(json.dumps(totals, indent=2))
 
 
 @main.command("import-urls")
@@ -314,8 +347,12 @@ def import_urls_cmd(path: str | None, from_drive: bool) -> None:
         local_dir.mkdir(parents=True, exist_ok=True)
         for entry in rclone.lsjson():
             fname = entry.get("Name", "")
-            # skip CSVs this node produced itself
-            if not fname.endswith(".csv") or fname.startswith(f"node{node.node_id}_"):
+            # Multi-consumer addressing: the producer writes one CSV per
+            # consumer named node{consumer_node_id}_{ts}.csv -- import only
+            # the CSV addressed to THIS node (skip the other consumers').
+            # (Pre-split handoffs named after the producer are also skipped:
+            # a consumer never takes a CSV that isn't its own.)
+            if not fname.endswith(".csv") or not fname.startswith(f"node{node.node_id}_"):
                 continue
             rclone.download_file((fname,), local_dir)
             s = import_urls(reg, local_dir / fname)
