@@ -140,10 +140,24 @@ def test_render_chart_pages_to_png(decks, tmp_path):
 
 
 @pytest.mark.skipif(not _tools_available(), reason="soffice/pdftoppm not installed")
-def test_render_missing_page_fails_cleanly(decks, tmp_path):
+def test_render_missing_page_skipped_not_fatal(decks, tmp_path):
     from pptxsweeper.extract.render import render_file_pages
-    res = render_file_pages(decks["chart_heavy"], [99], tmp_path, dpi=100)
-    assert not res.ok
+    # A page beyond the PDF's real page count must be SKIPPED, not kill the
+    # whole file (LibreOffice drops hidden/notes-only slides, so feature
+    # vectors can claim slides the PDF does not contain).
+    res = render_file_pages(decks["chart_heavy"], [1, 99], tmp_path, dpi=100)
+    assert res.ok, res.reason
+    assert 1 in res.pages          # the real page still renders
+    assert 99 not in res.pages     # the phantom page is dropped
+    assert res.pages[1].exists() and res.pages[1].stat().st_size > 0
+
+
+@pytest.mark.skipif(not _tools_available(), reason="soffice/pdftoppm not installed")
+def test_render_all_missing_pages_ok_empty(decks, tmp_path):
+    from pptxsweeper.extract.render import render_file_pages
+    res = render_file_pages(decks["chart_heavy"], [99, 100], tmp_path, dpi=100)
+    assert res.ok                 # not fatal even if every page is out of range
+    assert res.pages == {}
 
 
 # ----------------------------------------------------------------------

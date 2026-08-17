@@ -27,7 +27,33 @@ log = logging.getLogger("pptxsweeper.extract.render")
 class RenderResult:
     ok: bool
     pages: dict[int, Path] = field(default_factory=dict)   # page_index -> PNG
+    skipped: list[int] = field(default_factory=list)       # indexes beyond the PDF's real page count
+    failed: list[int] = field(default_factory=list)        # indexes that errored rendering
     reason: str = ""
+
+
+def _pdf_page_count(pdf_path: Path, pdfinfo_bin: str = "pdfinfo") -> int | None:
+    """Real page count of the converted PDF via pdfinfo (poppler-utils).
+
+    LibreOffice's PDF export can drop slides (hidden slides, notes-only
+    layouts), so the deck's slide count is NOT a reliable upper bound for
+    page indexes. Returns None if pdfinfo is unavailable.
+    """
+    try:
+        proc = subprocess.run(
+            [pdfinfo_bin, str(pdf_path)], capture_output=True, text=True,
+            timeout=15, start_new_session=True)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in proc.stdout.splitlines():
+        if line.lower().startswith("pages:"):
+            try:
+                return int(line.split(":", 1)[1].strip())
+            except ValueError:
+                return None
+    return None
 
 
 def _pdftoppm(pdf_path: Path, page_index: int, out_dir: Path, dpi: int,
@@ -81,9 +107,11 @@ def render_file_pages(payload: Path, page_indexes: list[int], out_dir: Path,
                       page_timeout_s: int = 120) -> RenderResult:
     """Render the given 0-based page indexes of a .pptx/.ppt/.pdf to PNG.
 
-    Returns {ok, pages: {0-based index: PNG path}, reason}. A single page
-    failing (corrupt PDF, pdftoppm error) marks the whole file failed --
-    partial renders are deleted so a re-run re-renders cleanly.
+    Returns {ok, pages: {0-based index: PNG path}, skipped, failed, reason}.
+    Indexes beyond the PDF's real page count (LibreOffice drops hidden/
+    notes-only slides) are SKIPPED, and a single page failing to render is
+    recorded in `failed` -- neither kills the other pages of the file.
+    Only a genuine conversion failure (deck->pdf) fails the whole file.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = Path(payload)
@@ -99,16 +127,26 @@ def render_file_pages(payload: Path, page_indexes: list[int], out_dir: Path,
             return RenderResult(False, reason=f"deck_to_pdf_failed:{res.reason}")
         pdf_path = res.output_path
 
+    real_pages = _pdf_page_count(pdf_path)
+    if real_pages is not None:
+        # Clamp to the PDF's real page count: requesting a page that does
+        # not exist makes pdftoppm exit 99 and would otherwise reject the
+        # whole file. pdfinfo unavailable -> render and let failures fall
+        # into `failed` individually.
+        page_indexes = [i for i in page_indexes if i < real_pages]
+
     pages: dict[int, Path] = {}
+    skipped: list[int] = []
+    failed: list[int] = []
     try:
         for idx in page_indexes:
             png = _pdftoppm(pdf_path, idx + 1, work, dpi,
                             pdftoppm_bin=pdftoppm_bin, timeout_s=page_timeout_s)
             if png is None:
-                return RenderResult(False, pages=pages,
-                                    reason=f"pdftoppm_failed_page_{idx + 1}")
+                failed.append(idx)
+                continue
             pages[idx] = png
-        return RenderResult(True, pages=pages)
+        return RenderResult(True, pages=pages, skipped=skipped, failed=failed)
     finally:
         if not pages:
             shutil.rmtree(work, ignore_errors=True)

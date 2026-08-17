@@ -118,7 +118,13 @@ class Rclone:
                  bwlimit: str | None = None, timeout: int | None = None,
                  retry: bool = True) -> None:
         args = ["copy", str(local_dir), self.remote_path(*remote_parts),
-                "--transfers", "8", "--checkers", "16"]
+                "--transfers", "4", "--checkers", "8",
+                # Google Drive free tier throttles hard on API query rate
+                # (403 "Queries per minute") once a batch dir grows to
+                # hundreds of files. tpslimit paces rclone's API calls so
+                # the quota is never tripped: transfers stall for minutes
+                # and verification fails -> nothing marks delivered.
+                "--tpslimit", "8", "--tpslimit-burst", "16"]
         if bwlimit:
             args += ["--bwlimit", bwlimit]
         self._run(args, retry=retry, timeout=timeout)
