@@ -65,9 +65,7 @@ class ExtractStage:
                WHERE f.decision='DELIVER' AND f.delivered_at IS NULL
                  AND f.local_path IS NOT NULL
                  AND f.feature_vectors IS NOT NULL
-                 AND NOT EXISTS (SELECT 1 FROM pages p
-                                 WHERE p.file_id = f.id
-                                   AND p.status IN ('extracted','delivered','duplicate'))
+                 AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.file_id = f.id)
                ORDER BY f.id LIMIT ?""",
             (limit,),
         ).fetchall()
