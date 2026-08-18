@@ -131,10 +131,15 @@ class ImportDriveStage:
         return sqlite3.connect(str(self._idx_path))
 
     def _download_raw(self, rclone, remote_path: str, local_path: Path) -> None:
-        """Download a single file from a fully-resolved remote path
-        (bypasses Rclone's root_folder nesting via raw rclone copy)."""
+        """Download a single file from the conversion folder.
+
+        ``remote_path`` is relative to the rclone root_folder (as returned
+        by ``lsjson -R``).  ``rclone.remote_path(remote_path)`` produces
+        the full remote address (e.g.
+        ``gdrive:PptxSweeper_Conversion/BATCH_01/file.pptx``).
+        """
         import subprocess
-        src = f"{rclone.remote}:{remote_path}"
+        src = rclone.remote_path(remote_path)
         proc = subprocess.run(
             [rclone.bin, "copy", src, str(local_path.parent),
              "--no-traverse", "--transfers", "1", "--checkers", "1",
