@@ -96,6 +96,29 @@ class ImportDriveStage:
                       retry_backoff_s=list(rc.get("retry_backoff_s", [5, 30, 120])),
                       timeout=int(rc.get("timeout_s", 300)))
 
+    def _list_decks(self, rclone) -> list[dict]:
+        """All deck files under the conversion folder, recursively.
+
+        The move tool keeps source batches intact (BATCH_01/ etc. under
+        the conversion root), so decks may live in subfolders. Returns
+        entries with a `Path` key (relative remote path) and `Name`.
+        """
+        import subprocess
+        proc = subprocess.run(
+            [rclone.bin, "lsjson", "-R", rclone.remote_path()],
+            capture_output=True, text=True, timeout=rclone.timeout)
+        if proc.returncode != 0:
+            raise RuntimeError(f"lsjson -R failed: {proc.stderr[-300:]}")
+        entries = json.loads(proc.stdout or "[]")
+        out = []
+        for e in entries:
+            name = e.get("Name") or ""
+            if name.lower().endswith((".pptx", ".ppt", ".pdf")):
+                e["Path"] = name          # relative to the conversion root
+                e["Name"] = name.rsplit("/", 1)[-1]
+                out.append(e)
+        return out
+
     def _vectors_index(self) -> sqlite3.Connection | None:
         if not self.vectors_file.exists():
             log.warning("vectors file %s not found; imported decks will be "
@@ -126,8 +149,7 @@ class ImportDriveStage:
         self.work_dir.mkdir(parents=True, exist_ok=True)
         idx = self._vectors_index()
 
-        entries = rclone.lsjson()   # decks + sidecars at folder root
-        decks = [e for e in entries if e["Name"].lower().endswith((".pptx", ".ppt", ".pdf"))]
+        decks = self._list_decks(rclone)
         stats["listed"] = len(decks)
         log.info("import-drive: %d decks in %s:%s", len(decks), self.remote, self.folder)
         if not decks:
@@ -147,7 +169,8 @@ class ImportDriveStage:
                             free_gb(self.tmp_dir), self.min_free_gb)
                 break
             try:
-                ok = self._import_one(rclone, idx, name, existing, stats)
+                ok = self._import_one(rclone, idx, name, existing, stats,
+                                      remote_path=deck.get("Path"))
                 if ok:
                     stats["imported"] += 1
             except Exception:
@@ -159,13 +182,16 @@ class ImportDriveStage:
         return stats
 
     # ------------------------------------------------------------------
-    def _import_one(self, rclone, idx, name: str, existing: set, stats: dict) -> bool:
+    def _import_one(self, rclone, idx, name: str, existing: set, stats: dict,
+                    remote_path: str | None = None) -> bool:
+        rp = remote_path or name
         stem = Path(name).stem
         sidecar = f"{stem}.metadata.json"
+        sidecar_rp = f"{Path(rp).parent / sidecar}" if "/" in rp else sidecar
 
         local = self.work_dir / name
         if not local.exists():
-            rclone.download_file((name,), self.work_dir)
+            rclone.download_file((rp,), self.work_dir)
         if not local.exists():
             log.error("download produced no file for %s", name)
             stats["errors"] += 1
@@ -174,7 +200,7 @@ class ImportDriveStage:
         side = self.work_dir / sidecar
         if not side.exists():
             try:
-                rclone.download_file((sidecar,), self.work_dir)
+                rclone.download_file((sidecar_rp,), self.work_dir)
             except Exception:
                 log.warning("no sidecar for %s; importing without provenance", name)
         meta = {}

@@ -51,9 +51,14 @@ class _FakeRclone:
     def check_remote_configured(self) -> bool:
         return True
 
+    bin = "rclone"
+
     def lsjson(self) -> list[dict]:
         return [{"Name": f.name, "Size": f.stat().st_size}
                 for f in sorted(self.root.iterdir()) if f.is_file()]
+
+    def remote_path(self, *parts: str) -> str:
+        return f"{self.remote}:{'/'.join(p for p in parts if p)}"
 
     def download_file(self, remote_parts: tuple[str, ...], local_dir: Path) -> None:
         src = self.root / remote_parts[0]
@@ -61,15 +66,33 @@ class _FakeRclone:
             dst = local_dir / src.name
             dst.write_bytes(src.read_bytes())
 
-    def remote_path(self, *parts: str) -> str:
-        return f"{self.remote}:{'/'.join(p for p in parts if p)}"
+    # _list_decks shells out to `rclone lsjson -R`; tests monkeypatch the
+    # stage's _list_decks to use this instead.
+    def recursive_lsjson(self) -> list[dict]:
+        out = []
+        for f in sorted(self.root.rglob("*")):
+            if f.is_file():
+                rel = str(f.relative_to(self.root))
+                out.append({"Name": rel, "Size": f.stat().st_size})
+        return out
 
 
 def _seed_remote(rclone: _FakeRclone, name: str, sidecar: dict) -> None:
     deck = rclone.root / name
+    deck.parent.mkdir(parents=True, exist_ok=True)
     deck.write_bytes(b"PK\x03\x04fake-deck-bytes")
     stem = Path(name).stem
     (rclone.root / f"{stem}.metadata.json").write_text(json.dumps(sidecar))
+
+
+def _patch_listing(stage, rclone):
+    """Point the stage's recursive listing at the fake's tree."""
+    stage._list_decks = lambda rc: [
+        {"Name": e["Name"].rsplit("/", 1)[-1], "Path": e["Name"],
+         "Size": e["Size"]}
+        for e in rclone.recursive_lsjson()
+        if e["Name"].lower().endswith((".pptx", ".ppt", ".pdf"))
+    ]
 
 
 def _sha256_of_deck(name: str) -> str:
@@ -96,6 +119,7 @@ def test_import_with_vectors_hit(tmp_path, registry):
 
     stage = ImportDriveStage(cfg, registry, dry_run=False)
     stage._rclone = lambda: rclone
+    _patch_listing(stage, rclone)
     stats = stage.run()
     assert stats["imported"] == 1
     assert stats["vectors_hit"] == 1
@@ -126,6 +150,7 @@ def test_import_vectors_miss_falls_back_to_classify(tmp_path, registry):
 
     stage = ImportDriveStage(cfg, registry, dry_run=False)
     stage._rclone = lambda: rclone
+    _patch_listing(stage, rclone)
     stats = stage.run()
     assert stats["imported"] == 1
     assert stats["vectors_miss"] == 1
@@ -150,6 +175,7 @@ def test_import_idempotent_second_run_skips(tmp_path, registry):
 
     stage = ImportDriveStage(cfg, registry, dry_run=False)
     stage._rclone = lambda: rclone
+    _patch_listing(stage, rclone)
     s1 = stage.run()
     assert s1["imported"] == 1
     s2 = stage.run()
@@ -178,12 +204,36 @@ def test_import_existing_url_not_duplicated(tmp_path, registry):
 
     stage = ImportDriveStage(cfg, registry, dry_run=False)
     stage._rclone = lambda: rclone
+    _patch_listing(stage, rclone)
     stats = stage.run()
     assert stats["imported"] == 1   # file row still created under existing url
     u = registry.conn.execute("SELECT * FROM urls WHERE url=?", ("https://y.edu/d.pptx",)).fetchone()
     assert u["discovery_source"] == "live_pipeline"   # original row untouched
     f = registry.conn.execute("SELECT * FROM files").fetchone()
     assert f["url_id"] == u["id"]
+
+
+def test_import_nested_subfolders(tmp_path, registry):
+    """Decks living in BATCH_* subfolders under the conversion root are
+    found by the recursive listing and downloaded from their real path."""
+    from pptxsweeper.stages.import_drive import ImportDriveStage
+    cfg = _cfg(tmp_path)
+    rclone = _FakeRclone(tmp_path)
+    side = {"sha256": _sha256_of_deck("n.pptx"), "source_url": "https://n.edu/n.pptx",
+            "source_domain": "n.edu", "format": "pptx"}
+    _seed_remote(rclone, "BATCH_01/n.pptx", side)
+    _write_vectors(tmp_path, [{"sha256": _sha256_of_deck("n.pptx"),
+                               "feature_vectors": [], "quality": "HIGH",
+                               "format": "pptx", "decision": "DELIVER"}])
+
+    stage = ImportDriveStage(cfg, registry, dry_run=False)
+    stage._rclone = lambda: rclone
+    _patch_listing(stage, rclone)
+    stats = stage.run()
+    assert stats["imported"] == 1
+    f = registry.conn.execute("SELECT * FROM files").fetchone()
+    assert Path(f["local_path"]).exists()
+    assert f["original_filename"] == "n.pptx"
 
 
 def test_import_cleanup_delivered_decks(tmp_path, registry):
@@ -201,6 +251,7 @@ def test_import_cleanup_delivered_decks(tmp_path, registry):
 
     stage = ImportDriveStage(cfg, registry, dry_run=False)
     stage._rclone = lambda: rclone
+    _patch_listing(stage, rclone)
     stage.run()
     f = registry.conn.execute("SELECT * FROM files").fetchone()
     payload = Path(f["local_path"])
