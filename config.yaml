@@ -261,6 +261,17 @@ delivery:
   # A small cap keeps every cycle bounded: copy completes, sizes verify,
   # pages mark delivered, next cycle takes the next slice.
   max_files_per_cycle: 100
+  # Pull phase-1 decks from a Drive conversion folder and register them
+  # for image delivery, reusing pre-computed feature vectors (exported
+  # from the VM registries that classified them) so classify is skipped.
+  # vectors_file: gzip JSONL from tools/export_vectors.py (sha256 keyed).
+  import_drive:
+    enabled: false
+    remote: gdrive          # rclone remote holding the conversion folder
+    folder: PptxSweeper_Conversion
+    vectors_file: data/drive_vectors.jsonl.gz
+    chunk_limit: 100        # decks imported per cycle
+    min_free_disk_gb: 2
 
 classify:
   review_dir_cap_gb: 20    # local review/ payloads pruned after Drive sync

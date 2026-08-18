@@ -63,6 +63,15 @@ conversion:
 # ----------------------------------------------------------------------
 delivery:
   image: true
+  # Pull the moved phase-1 decks (old 200GB account -> PptxSweeper_Conversion
+  # on this 2TB account) into image delivery, reusing their pre-computed
+  # feature vectors so no re-classify is needed.
+  import_drive:
+    enabled: true
+    folder: PptxSweeper_Conversion
+    vectors_file: data/drive_vectors.jsonl.gz
+    chunk_limit: 200
+    min_free_disk_gb: 6
 
 extract:
   max_concurrent: 2

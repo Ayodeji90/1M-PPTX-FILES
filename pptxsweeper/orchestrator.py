@@ -246,6 +246,12 @@ class Orchestrator:
                                    .get("review_auto_promote_hours", 2)) * 3600
         while not self.stop.is_set():
             self._stage("classify", "classify")
+            # Image delivery: pull phase-1 decks from the Drive conversion
+            # folder (reusing their pre-computed feature vectors) before
+            # extract, so freshly imported decks render the same cycle.
+            imp = self.cfg.raw.get("delivery", {}).get("import_drive", {})
+            if bool(imp.get("enabled", False)):
+                self._stage("import-drive", "import-drive")
             # Image delivery: extract graphical pages -> PNG before packing.
             # In deck mode this is a no-op (extract finds no classified
             # files without pages... it finds DELIVER files but the pages

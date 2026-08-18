@@ -180,6 +180,23 @@ def classify(dry_run: bool, limit: int | None, reclassify: bool, sync_review: bo
 
 
 # ----------------------------------------------------------------------
+@main.command("import-drive")
+@click.option("--dry-run", is_flag=True)
+@click.option("--limit", type=int, default=None,
+              help="Cap decks imported per pass (testing).")
+def import_drive(dry_run: bool, limit: int | None) -> None:
+    """Image delivery: pull phase-1 decks from a Drive conversion folder,
+    reuse their pre-computed feature vectors (exported from the VM
+    registries that classified them), and register them for extract --
+    skipping the CPU-heavy classify pass. Decks without vectors fall back
+    to the normal classify path."""
+    cfg, reg = _boot("import_drive")
+    from .stages.import_drive import ImportDriveStage
+    stage = ImportDriveStage(cfg, reg, dry_run=dry_run)
+    click.echo(json.dumps(stage.run(limit=limit), indent=2))
+
+
+# ----------------------------------------------------------------------
 @main.command()
 @click.option("--dry-run", is_flag=True)
 @click.option("--limit", type=int, default=None,
