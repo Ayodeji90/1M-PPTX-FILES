@@ -177,6 +177,7 @@ def test_stream_upload_image_mode(tmp_path, registry):
         assert r["delivered_at"] is not None
         assert r["delivered_filename"].startswith("BATCH_01_img_")
         assert r["local_path"] is None
+        assert r["status"] == "delivered"
     # batch counts the images
     batch = registry.conn.execute("SELECT * FROM batches").fetchone()
     assert batch["file_count"] == 3

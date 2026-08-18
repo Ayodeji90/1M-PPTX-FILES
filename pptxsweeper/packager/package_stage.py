@@ -538,8 +538,8 @@ class PackageStage:
         Runs inside the caller's transaction."""
         if self.image_mode:
             self.reg.conn.execute(
-                "UPDATE pages SET delivered_at=?, local_path=NULL, updated_at=? WHERE id=?",
-                (now, now, r["id"]))
+                "UPDATE pages SET status='delivered', delivered_at=?, local_path=NULL, "
+                "updated_at=? WHERE id=?", (now, now, r["id"]))
             file_id = r.get("file_id")
         else:
             self.reg.conn.execute(
