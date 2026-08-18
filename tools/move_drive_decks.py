@@ -139,8 +139,11 @@ def main() -> None:
 
     for s in chosen:
         folder = s.split(":", 1)[1].rstrip("/")
-        leaf = folder.split("/")[-1]
-        dest = f"{args.dest.rstrip('/')}/{leaf}"
+        # Flatten the full source path into a unique dest folder name
+        # (two sources can share a leaf like "BATCH_01" — that would
+        # collide and mix files).
+        safe_name = folder.replace("/", "__")
+        dest = f"{args.dest.rstrip('/')}/{safe_name}"
         print(f"\n=== {s} -> {dest} ===", flush=True)
         copy_folder(s, dest)
         verify_folder(s, dest)

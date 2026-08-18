@@ -130,6 +130,20 @@ class ImportDriveStage:
             log.info("built vectors index from %s (%d rows)", self.vectors_file, n)
         return sqlite3.connect(str(self._idx_path))
 
+    def _download_raw(self, rclone, remote_path: str, local_path: Path) -> None:
+        """Download a single file from a fully-resolved remote path
+        (bypasses Rclone's root_folder nesting via raw rclone copy)."""
+        import subprocess
+        src = f"{rclone.remote}:{remote_path}"
+        proc = subprocess.run(
+            [rclone.bin, "copy", src, str(local_path.parent),
+             "--no-traverse", "--transfers", "1", "--checkers", "1",
+             "--retries", "3"],
+            capture_output=True, text=True, timeout=rclone.timeout)
+        if proc.returncode != 0:
+            log.warning("rclone download failed for %s: %s", remote_path,
+                        proc.stderr.strip()[-200:])
+
     def _lookup(self, idx: sqlite3.Connection | None, sha256: str) -> dict | None:
         if idx is None:
             return None
@@ -187,20 +201,20 @@ class ImportDriveStage:
         rp = remote_path or name
         stem = Path(name).stem
         sidecar = f"{stem}.metadata.json"
-        sidecar_rp = f"{Path(rp).parent / sidecar}" if "/" in rp else sidecar
+        sidecar_rp = str(Path(rp).parent / sidecar) if "/" in rp else sidecar
 
-        local = self.work_dir / name
+        local = self.work_dir / Path(name).name   # flat local name
         if not local.exists():
-            rclone.download_file((rp,), self.work_dir)
+            self._download_raw(rclone, rp, local)
         if not local.exists():
             log.error("download produced no file for %s", name)
             stats["errors"] += 1
             return False
 
-        side = self.work_dir / sidecar
+        side = self.work_dir / Path(sidecar).name
         if not side.exists():
             try:
-                rclone.download_file((sidecar_rp,), self.work_dir)
+                self._download_raw(rclone, sidecar_rp, side)
             except Exception:
                 log.warning("no sidecar for %s; importing without provenance", name)
         meta = {}
