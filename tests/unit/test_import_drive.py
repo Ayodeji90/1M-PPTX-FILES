@@ -61,7 +61,7 @@ class _FakeRclone:
         return f"{self.remote}:{'/'.join(p for p in parts if p)}"
 
     def download_file(self, remote_parts: tuple[str, ...], local_dir: Path) -> None:
-        src = self.root / remote_parts[0]
+        src = self.root.joinpath(*remote_parts)
         if src.exists():
             dst = local_dir / src.name
             dst.write_bytes(src.read_bytes())

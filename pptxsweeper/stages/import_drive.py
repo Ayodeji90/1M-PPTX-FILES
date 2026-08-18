@@ -134,20 +134,14 @@ class ImportDriveStage:
         """Download a single file from the conversion folder.
 
         ``remote_path`` is relative to the rclone root_folder (as returned
-        by ``lsjson -R``).  ``rclone.remote_path(remote_path)`` produces
-        the full remote address (e.g.
-        ``gdrive:PptxSweeper_Conversion/BATCH_01/file.pptx``).
+        by ``lsjson -R``).  Split on ``/`` so the Rclone wrapper's
+        ``remote_path(*parts)`` builds the correct full address.
         """
-        import subprocess
-        src = rclone.remote_path(remote_path)
-        proc = subprocess.run(
-            [rclone.bin, "copy", src, str(local_path.parent),
-             "--no-traverse", "--transfers", "1", "--checkers", "1",
-             "--retries", "3"],
-            capture_output=True, text=True, timeout=rclone.timeout)
-        if proc.returncode != 0:
-            log.warning("rclone download failed for %s: %s", remote_path,
-                        proc.stderr.strip()[-200:])
+        parts = tuple(remote_path.split("/"))
+        try:
+            rclone.download_file(parts, local_path.parent)
+        except Exception:
+            log.warning("rclone download failed for %s", remote_path)
 
     def _lookup(self, idx: sqlite3.Connection | None, sha256: str) -> dict | None:
         if idx is None:
