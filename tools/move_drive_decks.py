@@ -30,14 +30,19 @@ import time
 RCLONE = "rclone"
 
 
-def _run(args: list[str], timeout: int = 600) -> subprocess.CompletedProcess:
+def _run(args: list[str], timeout: int | None = 3600) -> subprocess.CompletedProcess:
     print("+", " ".join(args), flush=True)
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
 
 def folder_deck_count(remote_path: str) -> tuple[int, int]:
-    """(files, decks) under a remote folder. Decks = pptx/ppt/pdf only."""
-    proc = _run([RCLONE, "ls", remote_path])
+    """(files, decks) under a remote folder. Decks = pptx/ppt/pdf only.
+
+    Uses ``rclone ls --max-depth 2`` so subfolder decks are counted
+    (the move keeps BATCH_* subfolders intact).  timeout=None because
+    listing a full 200GB account can take many minutes.
+    """
+    proc = _run([RCLONE, "ls", remote_path, "--max-depth", "2"], timeout=None)
     if proc.returncode != 0:
         raise SystemExit(f"rclone ls failed: {proc.stderr[-500:]}")
     files = 0
@@ -54,11 +59,16 @@ def folder_deck_count(remote_path: str) -> tuple[int, int]:
 
 
 def copy_folder(src: str, dest: str) -> None:
-    """Copy one folder; raise on failure."""
+    """Copy one folder; raise on failure.  No wall-clock timeout per
+    folder -- the old account can be extremely slow (rate-limited) and a
+    copy may legitimately run for hours.  rclone handles retries; we just
+    let it run."""
     proc = _run([RCLONE, "copy", src, dest,
-                 "--transfers", "4", "--checkers", "8",
-                 "--tpslimit", "6", "--tpslimit-burst", "12",
-                 "--retries", "5", "--low-level-retries", "10"])
+                 "--transfers", "6", "--checkers", "12",
+                 "--tpslimit", "8", "--tpslimit-burst", "16",
+                 "--retries", "8", "--low-level-retries", "20",
+                 "--retries-sleep", "30s"],
+                timeout=None)   # no wall-clock limit; rclone self-manages
     if proc.returncode != 0:
         raise SystemExit(f"rclone copy failed: {proc.stderr[-800:]}")
 
