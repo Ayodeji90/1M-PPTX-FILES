@@ -86,9 +86,13 @@ def _seed_remote(rclone: _FakeRclone, name: str, sidecar: dict) -> None:
 
 
 def _patch_listing(stage, rclone):
-    """Point the stage's recursive listing at the fake's tree."""
+    """Point the stage's recursive listing at the fake's tree.
+    The fake's recursive_lsjson returns Name as the relative path
+    (matching rclone lsjson -R's "Path" field).  We set both Name
+    (short) and Path (full relative) to match the real stage."""
     stage._list_decks = lambda rc: [
-        {"Name": e["Name"].rsplit("/", 1)[-1], "Path": e["Name"],
+        {"Name": e["Name"].rsplit("/", 1)[-1],
+         "Path": e["Name"],   # full relative path from fake root
          "Size": e["Size"]}
         for e in rclone.recursive_lsjson()
         if e["Name"].lower().endswith((".pptx", ".ppt", ".pdf"))

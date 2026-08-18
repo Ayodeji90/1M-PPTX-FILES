@@ -113,8 +113,11 @@ class ImportDriveStage:
         out = []
         for e in entries:
             name = e.get("Name") or ""
+            # rclone lsjson -R includes "Path" with the full relative path
+            # (e.g. "BATCH_01/file.pptx") while Name is just the filename.
+            rel = e.get("Path") or name
             if name.lower().endswith((".pptx", ".ppt", ".pdf")):
-                e["Path"] = name          # relative to the conversion root
+                e["Path"] = rel
                 e["Name"] = name.rsplit("/", 1)[-1]
                 out.append(e)
         return out
