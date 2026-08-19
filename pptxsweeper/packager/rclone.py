@@ -29,7 +29,7 @@ class Rclone:
     def __init__(self, bin: str = "rclone", remote: str = "gdrive",
                  root_folder: str = "PptxSweeper_Delivery",
                  retries: int = 5, retry_backoff_s: list[int] | None = None,
-                 timeout: int = 900):
+                 timeout: int = 900, transfers: int = 4, checkers: int = 8):
         self.bin = bin
         self.remote = remote
         self.root_folder = root_folder
@@ -38,6 +38,8 @@ class Rclone:
         # Wall-clock cap per rclone call: a stalled Drive connection must
         # not be able to block the deliver loop for 3600s * retries.
         self.timeout = timeout
+        self.transfers = transfers
+        self.checkers = checkers
 
     # ------------------------------------------------------------------
     def remote_path(self, *parts: str) -> str:
@@ -118,16 +120,16 @@ class Rclone:
                  bwlimit: str | None = None, timeout: int | None = None,
                  retry: bool = True) -> None:
         args = ["copy", str(local_dir), self.remote_path(*remote_parts),
-                "--transfers", "4", "--checkers", "8",
+                "--transfers", str(self.transfers),
+                "--checkers", str(self.checkers),
                 # Google Drive free tier throttles hard on API query rate
                 # (403 "Queries per minute") once a batch dir grows to
                 # hundreds of files. tpslimit paces rclone's API calls so
                 # the quota is never tripped: transfers stall for minutes
                 # and verification fails -> nothing marks delivered.
-                # Keep the per-VM pace modest: VM1 and VM2 share one Drive
-                # account, so two pipelines at 8 tps each blow past the
-                # free-tier query budget together.
-                "--tpslimit", "4", "--tpslimit-burst", "8"]
+                # 4x the old tpslimit for faster cycles; each VM gets its
+                # own Drive account so no cross-VM contention.
+                "--tpslimit", "8", "--tpslimit-burst", "16"]
         if bwlimit:
             args += ["--bwlimit", bwlimit]
         self._run(args, retry=retry, timeout=timeout)

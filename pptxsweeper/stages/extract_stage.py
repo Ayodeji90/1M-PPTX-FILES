@@ -26,7 +26,7 @@ from ..extract.render import render_file_pages
 from ..extract.select import select_graphical_pages
 from ..utils.disk import free_gb
 from ..utils.hashing import sha256_file
-from ..utils.perceptual import dhash
+from ..utils.perceptual import dhash, dhash_invariant, is_sub_image
 
 log = logging.getLogger("pptxsweeper.extract")
 
@@ -39,6 +39,10 @@ class ExtractStage:
         ext = cfg.raw.get("extract", {})
         self.dpi = int(ext.get("dpi", 150))
         self.max_concurrent = max(1, int(ext.get("max_concurrent", 2)))
+        # Per-file parallel page rendering: render up to N pages of the
+        # same file concurrently. pdftoppm is per-page (no shared state
+        # between pages), so this is safe and keeps the CPU saturated.
+        self.parallel_pages = max(1, int(ext.get("parallel_pages", 1)))
         self.page_timeout_s = int(ext.get("page_timeout_s", 120))
         self.conv_timeout_s = int(ext.get("conv_timeout_s", 180))
         self.phash_distance = int(ext.get("phash_distance", 10))
@@ -46,8 +50,14 @@ class ExtractStage:
         self.pdftoppm_bin = ext.get("pdftoppm_bin", "pdftoppm")
         self.pages_dir = cfg.path("paths", "pages_dir")
         self.tmp_dir = cfg.path("paths", "download_tmp_dir")
-        self.chunk = int(cfg.raw.get("extract", {}).get("chunk_limit", 50))
-        self.min_free_gb = float(cfg.raw.get("extract", {}).get("min_free_disk_gb", 2))
+        self.chunk = int(ext.get("chunk_limit", 50))
+        self.min_free_gb = float(ext.get("min_free_disk_gb", 2))
+        # Resolution-invariant dedup settings
+        self.dedup_resize = bool(ext.get("dedup_resize", False))
+        self.dedup_resize_size = int(ext.get("dedup_resize_size", 256))
+        # Sub-image containment detection
+        self.sub_image_detection = bool(ext.get("sub_image_detection", False))
+        self.sub_image_threshold = float(ext.get("sub_image_match_threshold", 0.85))
         self.stats = {"extracted": 0, "duplicate": 0, "rejected": 0, "errors": 0}
 
     # ------------------------------------------------------------------
@@ -125,10 +135,14 @@ class ExtractStage:
 
         indexes = [s["index"] for s in selection]
         work = self.tmp_dir / f"extract_{file_id}"
+        # When parallel_pages > 1, render pages concurrently using a
+        # thread pool. The deck->PDF conversion happens once (in render_file_pages),
+        # then each pdftoppm call is independent and runs in its own thread.
         res = render_file_pages(
             payload, indexes, work, dpi=self.dpi,
             soffice_bin=self.soffice_bin, pdftoppm_bin=self.pdftoppm_bin,
-            conv_timeout_s=self.conv_timeout_s, page_timeout_s=self.page_timeout_s)
+            conv_timeout_s=self.conv_timeout_s, page_timeout_s=self.page_timeout_s,
+            parallel_pages=self.parallel_pages)
         if not res.ok:
             shutil.rmtree(work, ignore_errors=True)
             self._record_pages_rejected(file_id, indexes, f"render:{res.reason}")
@@ -142,7 +156,13 @@ class ExtractStage:
                     rejected += 1
                     continue
                 sha = sha256_file(png)
-                phash = dhash(png.read_bytes())
+                # Use resolution-invariant dHash when enabled: same chart
+                # at different resolutions produces the same hash.
+                png_bytes = png.read_bytes()
+                if self.dedup_resize:
+                    phash = dhash_invariant(png_bytes, self.dedup_resize_size)
+                else:
+                    phash = dhash(png_bytes)
                 # Exact dup: same bytes already extracted/delivered anywhere
                 # (a deck reusing the identical chart image on two slides IS
                 # a duplicate deliverable).
@@ -163,6 +183,16 @@ class ExtractStage:
                                          sha256=sha, phash=phash, status="duplicate")
                     duplicate += 1
                     continue
+                # Sub-image containment: check if this page is a
+                # cropped/zoomed version of a previously delivered image.
+                if self.sub_image_detection:
+                    is_dup = self._check_sub_image(png_bytes, file_id)
+                    if is_dup:
+                        png.unlink(missing_ok=True)
+                        self.reg.insert_page(file_id=file_id, page_index=idx,
+                                             sha256=sha, phash=phash, status="duplicate")
+                        duplicate += 1
+                        continue
                 dest = self.pages_dir / f"{file_id}_{idx:03d}.png"
                 shutil.move(str(png), dest)
                 self.reg.insert_page(file_id=file_id, page_index=idx,
@@ -172,6 +202,42 @@ class ExtractStage:
         finally:
             shutil.rmtree(work, ignore_errors=True)
         return {"extracted": extracted, "duplicate": duplicate, "rejected": rejected}
+
+    # ------------------------------------------------------------------
+    def _check_sub_image(self, png_bytes: bytes, file_id: int) -> bool:
+        """Check if the extracted page is a cropped/zoomed version of a
+        previously delivered image. Uses OpenCV template matching.
+
+        Only checks against pages from recent batches (lookback_batches)
+        to keep the O(n) cost bounded.
+        """
+        try:
+            # Get recent delivered pages' SHA256s for comparison
+            lookback = self.cfg.raw.get("antifraud", {}).get("sub_image", {}).get(
+                "lookback_batches", 10)
+            recent = self.reg.conn.execute(
+                "SELECT p.local_path, p.sha256 FROM pages p "
+                "WHERE p.status = 'delivered' AND p.local_path IS NOT NULL "
+                "ORDER BY p.id DESC LIMIT ?",
+                (lookback * 50,)  # ~50 pages per batch
+            ).fetchall()
+
+            for ref_path, ref_sha in recent:
+                if ref_path is None:
+                    continue
+                try:
+                    ref_data = Path(ref_path).read_bytes()
+                except OSError:
+                    continue
+                is_sub, score = is_sub_image(
+                    png_bytes, ref_data,
+                    threshold=self.sub_image_threshold)
+                if is_sub:
+                    log.info("sub-image detected: score=%.3f vs %s", score, ref_sha[:12])
+                    return True
+        except Exception as e:
+            log.debug("sub-image check failed: %s", e)
+        return False
 
     # ------------------------------------------------------------------
     def _record_pages_rejected(self, file_id: int, indexes: list[int], reason: str) -> None:

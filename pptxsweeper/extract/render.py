@@ -104,7 +104,8 @@ def render_file_pages(payload: Path, page_indexes: list[int], out_dir: Path,
                       dpi: int = 150, soffice_bin: str = "soffice",
                       pdftoppm_bin: str = "pdftoppm",
                       conv_timeout_s: int = 180,
-                      page_timeout_s: int = 120) -> RenderResult:
+                      page_timeout_s: int = 120,
+                      parallel_pages: int = 1) -> RenderResult:
     """Render the given 0-based page indexes of a .pptx/.ppt/.pdf to PNG.
 
     Returns {ok, pages: {0-based index: PNG path}, skipped, failed, reason}.
@@ -112,6 +113,9 @@ def render_file_pages(payload: Path, page_indexes: list[int], out_dir: Path,
     notes-only slides) are SKIPPED, and a single page failing to render is
     recorded in `failed` -- neither kills the other pages of the file.
     Only a genuine conversion failure (deck->pdf) fails the whole file.
+
+    When parallel_pages > 1, pdftoppm calls run concurrently in a thread
+    pool (each page is independent after the deck->PDF conversion).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = Path(payload)
@@ -139,13 +143,32 @@ def render_file_pages(payload: Path, page_indexes: list[int], out_dir: Path,
     skipped: list[int] = []
     failed: list[int] = []
     try:
-        for idx in page_indexes:
-            png = _pdftoppm(pdf_path, idx + 1, work, dpi,
-                            pdftoppm_bin=pdftoppm_bin, timeout_s=page_timeout_s)
-            if png is None:
-                failed.append(idx)
-                continue
-            pages[idx] = png
+        if parallel_pages > 1 and len(page_indexes) > 1:
+            # Parallel rendering: each pdftoppm call is independent.
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            def _render_one(idx: int) -> tuple[int, Path | None]:
+                return idx, _pdftoppm(pdf_path, idx + 1, work, dpi,
+                                      pdftoppm_bin=pdftoppm_bin, timeout_s=page_timeout_s)
+            with ThreadPoolExecutor(max_workers=min(parallel_pages, len(page_indexes))) as pool:
+                futures = {pool.submit(_render_one, idx): idx for idx in page_indexes}
+                for fut in as_completed(futures):
+                    try:
+                        idx, png = fut.result()
+                        if png is None:
+                            failed.append(idx)
+                        else:
+                            pages[idx] = png
+                    except Exception:
+                        failed.append(futures[fut])
+        else:
+            # Sequential rendering (single page or parallel_pages=1)
+            for idx in page_indexes:
+                png = _pdftoppm(pdf_path, idx + 1, work, dpi,
+                                pdftoppm_bin=pdftoppm_bin, timeout_s=page_timeout_s)
+                if png is None:
+                    failed.append(idx)
+                    continue
+                pages[idx] = png
         return RenderResult(True, pages=pages, skipped=skipped, failed=failed)
     finally:
         if not pages:

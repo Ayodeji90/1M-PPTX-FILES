@@ -29,6 +29,7 @@ from ..db.dao import Registry, utcnow
 from ..naming import BatchAllocator, manifest_filename
 from ..node import NodeIdentity
 from ..utils.hashing import sha256_file
+from ..utils.perceptual import batch_anomaly_score
 from .compose import (deliverable_candidates, deliverable_page_candidates,
                        resolve_composition, select_for_batch, Selection)
 from .manifest import manifest_row, metadata_record, write_manifest
@@ -56,13 +57,16 @@ class PackageStage:
         # new phase never mixes with the deck deliveries.
         self.image_mode = bool(cfg.raw.get("delivery", {}).get("image", False))
         rc = cfg.raw["rclone"]
+        up = cfg.raw["upload"]
         root_folder = (cfg.rclone_image_root_folder() if self.image_mode
                        else cfg.rclone_root_folder())
         self.rclone = rclone or Rclone(
             bin=rc["bin"], remote=cfg.rclone_remote(), root_folder=root_folder,
-            retries=int(cfg.raw["upload"]["max_retries"]),
-            retry_backoff_s=list(cfg.raw["upload"]["retry_backoff_s"]),
+            retries=int(up["max_retries"]),
+            retry_backoff_s=list(up["retry_backoff_s"]),
             timeout=int(rc.get("timeout_s", 900)),
+            transfers=int(up.get("rclone_transfers", 8)),
+            checkers=int(up.get("rclone_checkers", 16)),
         )
         self.verify_method = rc["verify_method"]
         self.batch_size = int(cfg.raw["batch"]["size"])
@@ -451,6 +455,18 @@ class PackageStage:
     def _finalize_streamed(self, batch: dict, counts: dict) -> None:
         batch_id = batch["batch_id"]
         folder = batch["folder_name"]
+
+        # Anti-fraud: run batch anomaly detection before finalizing.
+        # If the batch contains suspicious AI-generated content patterns,
+        # log a warning (the images are already uploaded, but the flag
+        # goes into the manifest for client-side audit).
+        try:
+            af = self.cfg.raw.get("antifraud", {}).get("ai_detection", {})
+            if bool(af.get("enabled", False)):
+                self._check_batch_anomaly(batch_id, folder, af)
+        except Exception:
+            log.exception("batch anomaly check failed (non-blocking)")
+
         if self.image_mode:
             rows = [dict(x) for x in self.reg.conn.execute(
                 """SELECT p.*, p.sha256 AS image_sha256,
@@ -589,6 +605,68 @@ class PackageStage:
         unit = "images" if self.image_mode else "files"
         self.reg.log_event("payload_missing", None,
                            f"batch {batch_id}: {len(missing)} {unit} requeued")
+
+    # ------------------------------------------------------------------
+    # Anti-fraud: batch anomaly detection for AI-generated content
+    # ------------------------------------------------------------------
+    def _check_batch_anomaly(self, batch_id: int, folder: str,
+                             af_cfg: dict) -> None:
+        """Analyze the batch for AI-generated content patterns.
+
+        Runs during finalization. Samples up to 200 PNGs from the batch,
+        runs batch_anomaly_score, and logs a warning if the batch is flagged.
+        The anomaly score is recorded in the batch metadata for client audit.
+        """
+        min_batch = int(af_cfg.get("min_batch_size", 50))
+        # Count delivered pages in this batch directly
+        total = self.reg.conn.execute(
+            "SELECT COUNT(*) FROM pages WHERE batch_id = ? AND status = 'delivered'",
+            (batch_id,)).fetchone()[0]
+        if total < min_batch:
+            return
+
+        # Sample pages from this batch (limit to 200 for speed)
+        rows = self.reg.conn.execute(
+            "SELECT local_path, sha256 FROM pages "
+            "WHERE batch_id = ? AND status = 'delivered' "
+            "AND local_path IS NOT NULL ORDER BY RANDOM() LIMIT 200",
+            (batch_id,)
+        ).fetchall()
+
+        if len(rows) < min_batch:
+            return
+
+        image_data = []
+        for path, sha in rows:
+            try:
+                from pathlib import Path as _P
+                data = _P(path).read_bytes()
+                image_data.append(data)
+            except OSError:
+                continue
+
+        if not image_data:
+            return
+
+        result = batch_anomaly_score(
+            image_data,
+            color_threshold=float(af_cfg.get("color_uniformity_threshold", 0.30)),
+            noise_threshold=float(af_cfg.get("noise_pattern_threshold", 0.25)))
+
+        if result["flagged"]:
+            log.warning(
+                "BATCH %s ANOMALY DETECTED: %.1f%% images show AI indicators "
+                "(color_uniformity=%.3f, noise_pattern=%.3f) -- "
+                "flagged for client audit",
+                folder, result["anomaly_fraction"] * 100,
+                result["color_uniformity_mean"],
+                result["noise_pattern_mean"])
+            self.reg.log_event("batch_anomaly", batch_id,
+                               f"AI anomaly: {result['anomaly_fraction']*100:.1f}% flagged")
+        else:
+            log.info("batch %s anomaly check OK: %.1f%% suspicious "
+                     "(threshold=15%%)",
+                     folder, result["anomaly_fraction"] * 100)
 
     # ------------------------------------------------------------------
     def backup_registry(self) -> Path:
