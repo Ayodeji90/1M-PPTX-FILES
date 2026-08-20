@@ -8,7 +8,7 @@
 # Enforced in three places: URL filter, download (magic bytes), classify.
 # pdf added for image delivery (graphical pages extracted from PDF reports
 # as well as decks).
-allowed_formats: ["pptx", "ppt", "pdf"]
+allowed_formats: ["pptx", "ppt"]
 
 contact_email_env: CONTACT_EMAIL
 user_agent_template: "PptxSweeperBot/1.0 (dataset research; {contact_email})"
@@ -180,7 +180,7 @@ common_crawl:
   # .ppt/.pptx files -- its crawler skips PowerPoint binaries -- so this
   # harvester will find very little. Wayback CDX + Tiers 2-6 are the
   # real ppt/pptx sources. (pdf added for image delivery.)
-  extensions: [".pptx", ".ppt", ".pdf"]
+  extensions: [".pptx", ".ppt"]
 
 quality:
   epsilon: 0.03
