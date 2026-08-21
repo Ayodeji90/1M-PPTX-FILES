@@ -400,8 +400,21 @@ def sync_dedup_cmd() -> None:
     """Exchange SHA256 lists with other machines through Drive _dedup/."""
     cfg, reg = _boot("sync_dedup")
     from .dedup_sync import sync
+    from .packager.rclone import Rclone
     node = NodeIdentity.from_env()
-    result = sync(reg, node, _rclone(cfg),
+    # The dedup folder must be at the Drive ROOT so all VMs (which may
+    # use different delivery root_folders) see the same shared location.
+    dedup_root = cfg.raw["multi_node"].get("dedup_rclone_root", "")
+    if dedup_root:
+        dedup_rclone = Rclone(
+            bin=cfg.raw["rclone"]["bin"],
+            remote=cfg.raw["rclone"]["remote_name"],
+            root_folder=dedup_root,
+            timeout=cfg.raw["rclone"].get("timeout_s", 900),
+        )
+    else:
+        dedup_rclone = _rclone(cfg)
+    result = sync(reg, node, dedup_rclone,
                   tmp_dir=cfg.path("paths", "download_tmp_dir") / "_dedup",
                   dedup_folder=cfg.raw["multi_node"]["dedup_folder"])
     click.echo(json.dumps(result, indent=2))

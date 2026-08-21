@@ -503,7 +503,8 @@ multi_node:
   # so VM2 (node1) and VM3 (node2) never receive the same URL. Leave
   # empty for the legacy single-consumer export.
   consumer_node_ids: [1, 2]
-  dedup_folder: _dedup            # on Drive, under the delivery root
+  dedup_folder: _dedup            # subfolder under dedup_rclone_root
+  dedup_rclone_root: ""           # Drive root for shared dedup; empty = use delivery root
   dedup_sync_interval_min: 60     # upload own hashes / import peers' hashes
   # Producer->consumer URL handoff (a download-only VM that takes a share
   # of another VM's discovered URLs instead of harvesting its own). The
