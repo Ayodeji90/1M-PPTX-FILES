@@ -281,12 +281,15 @@ class Orchestrator:
                 "SELECT status, COUNT(*) FROM urls GROUP BY status").fetchall())
             delivered = conn.execute(
                 "SELECT COUNT(*) FROM files WHERE delivered_at IS NOT NULL").fetchone()[0]
+            pages_delivered = conn.execute(
+                "SELECT COUNT(*) FROM pages WHERE status='delivered'").fetchone()[0]
             batches = conn.execute(
                 "SELECT COUNT(*) FROM batches WHERE state='finalized'").fetchone()[0]
             conn.close()
-            return {"s": by_status, "delivered": delivered, "batches": batches}
+            return {"s": by_status, "delivered": delivered,
+                    "pages_delivered": pages_delivered, "batches": batches}
         except sqlite3.Error:
-            return {"s": {}, "delivered": 0, "batches": 0}
+            return {"s": {}, "delivered": 0, "pages_delivered": 0, "batches": 0}
 
     def handoff_loop(self) -> None:
         """Producer exports a share of discovered URLs to Drive; consumer
@@ -311,7 +314,8 @@ class Orchestrator:
                   f"queue={s.get('discovered', 0)} "
                   f"downloaded={s.get('downloaded', 0)} staged={s.get('classified', 0)} "
                   f"review={s.get('review', 0)} rejected={s.get('rejected', 0)} "
-                  f"UPLOADED-TO-DRIVE={c['delivered']} batches={c['batches']}",
+                  f"DECKS-ON-DRIVE={c['delivered']} "
+                  f"IMAGES-ON-DRIVE={c['pages_delivered']} batches={c['batches']}",
                   flush=True)
             self._sleep(15)
 
