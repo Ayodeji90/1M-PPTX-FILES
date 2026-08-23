@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""
+CLIP Audit — One-Command Image Classifier
+
+Provisions a Colab GPU, mounts Google Drive, classifies images into
+PASS/REJECT/BORDERLINE, and returns results — all in one command.
+
+Usage:
+    # Interactive (prompts for Drive links):
+    python tools/clip_audit
+
+    # With arguments:
+    python tools/clip_audit --input "gdrive:/batch_001/part_001/files" --output "gdrive:/audited"
+
+    # With local paths (uploads to Colab, runs, downloads):
+    python tools/clip_audit --input ./batch_001/files --output ./audited
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+
+COLAB_BIN = None  # resolved at runtime
+
+
+def find_colab_cli():
+    """Find the colab CLI binary."""
+    global COLAB_BIN
+
+    # Check venv first
+    venv_path = os.path.join(os.path.dirname(__file__), "..", ".venv", "bin", "colab")
+    if os.path.isfile(venv_path):
+        COLAB_BIN = venv_path
+        return
+
+    # Check PATH
+    try:
+        subprocess.run(["colab", "version"], capture_output=True, check=True)
+        COLAB_BIN = "colab"
+        return
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    print("ERROR: colab CLI not found.")
+    print("Install it: pip install google-colab-cli")
+    sys.exit(1)
+
+
+def run_colab(*args, timeout=300, interactive=False):
+    """Run a colab CLI command and return output.
+
+    If interactive=True, connects stdin/stdout so the user can
+    complete OAuth or answer prompts manually.
+    """
+    cmd = [COLAB_BIN] + list(args)
+    print(f"  → {' '.join(cmd)}")
+
+    if interactive:
+        # Let the user interact (for OAuth, prompts, etc.)
+        result = subprocess.run(cmd, timeout=timeout)
+        return ""
+    else:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0 and result.stderr:
+            # Only print non-empty stderr
+            err = result.stderr.strip()
+            if err and "warning" not in err.lower():
+                print(f"    STDERR: {err}")
+        return result.stdout.strip()
+
+
+def check_existing_sessions():
+    """Check if there's already an active Colab session."""
+    try:
+        output = subprocess.run(
+            [COLAB_BIN, "sessions"],
+            capture_output=True, text=True, timeout=15,
+        )
+        text = output.stdout.strip()
+        # If there are active sessions, return the first one
+        if text and "No active" not in text and "no active" not in text.lower():
+            # Parse session name from output (first column)
+            lines = [l for l in text.split("\n") if l.strip() and "Session" not in l and "---" not in l]
+            if lines:
+                session = lines[0].split()[0]
+                return session
+    except Exception:
+        pass
+    return None
+
+
+def ensure_auth():
+    """Ensure the user has authenticated with Colab CLI.
+
+    On first run, the CLI needs OAuth. We detect this and guide the user.
+    """
+    # Check if there's already a session
+    existing = check_existing_sessions()
+    if existing:
+        print(f"  ✅ Found existing session: {existing}")
+        return existing
+
+    # No session — need to authenticate
+    print()
+    print("  ⚠️  First time setup: Colab CLI needs Google authentication.")
+    print()
+    print("  Please run this command in a SEPARATE terminal:")
+    print()
+    print(f"    cd ~/1M-PPTX-FILES && .venv/bin/colab new --gpu T4")
+    print()
+    print("  It will open a browser URL for Google login.")
+    print("  After authentication, come back here and press Enter.")
+    print()
+    input("  Press Enter when authenticated...")
+
+    # Check again
+    existing = check_existing_sessions()
+    if existing:
+        print(f"  ✅ Session ready: {existing}")
+        return existing
+
+    print("  ❌ No session found. Please complete authentication first.")
+    print(f"     Run: cd ~/1M-PPTX-FILES && .venv/bin/colab new --gpu T4")
+    sys.exit(1)
+
+
+def extract_drive_path(url_or_path):
+    """Extract the Drive folder path from a Google Drive URL or plain path."""
+    # Handle various Google Drive URL formats
+    if "drive.google.com" in url_or_path:
+        # https://drive.google.com/drive/folders/FOLDER_ID
+        # https://drive.google.com/drive/u/0/folders/FOLDER_ID
+        parts = url_or_path.split("/folders/")
+        if len(parts) > 1:
+            folder_id = parts[-1].split("?")[0]
+            return f"gdrive:/{folder_id}"
+        # Try to extract from /drive/folders/ pattern
+        if "/drive/" in url_or_path:
+            return url_or_path
+
+    # Plain path — use as-is
+    return url_or_path
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="CLIP Audit — Classify images as graphics-heavy or non-qualifying",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python tools/clip_audit
+  python tools/clip_audit --input "gdrive:/batch_001/files" --output "gdrive:/audited"
+  python tools/clip_audit --input ./local_images --output ./results --pass-threshold 0.75
+        """,
+    )
+    parser.add_argument("--input", "-i", help="Input folder (Google Drive link or local path)")
+    parser.add_argument("--output", "-o", help="Output folder (Google Drive link or local path)")
+    parser.add_argument("--pass-threshold", type=float, default=0.70, help="Pass threshold (default: 0.70)")
+    parser.add_argument("--reject-threshold", type=float, default=0.40, help="Reject threshold (default: 0.40)")
+    parser.add_argument("--batch-size", type=int, default=64, help="GPU batch size (default: 64)")
+    parser.add_argument("--gpu", default="T4", help="GPU type: T4, L4, A100 (default: T4)")
+    parser.add_argument("--keep-vm", action="store_true", help="Don't stop the Colab VM after running")
+    args = parser.parse_args()
+
+    find_colab_cli()
+
+    print("=" * 60)
+    print("  CLIP AUDIT — ONE-COMMAND IMAGE CLASSIFIER")
+    print("=" * 60)
+
+    # ── Step 0: Get input/output paths ──────────────────────────────────
+    input_path = args.input
+    output_path = args.output
+
+    if not input_path:
+        print()
+        input_path = input("  📂 Enter INPUT folder (Google Drive link or path): ").strip()
+    if not output_path:
+        output_path = input("  📁 Enter OUTPUT folder (Google Drive link or path): ").strip()
+
+    if not input_path or not output_path:
+        print("ERROR: Both input and output paths are required.")
+        sys.exit(1)
+
+    input_colab = extract_drive_path(input_path)
+    output_colab = extract_drive_path(output_path)
+
+    print(f"\n  Input:  {input_path}")
+    print(f"  Output: {output_path}")
+    print(f"  GPU:    {args.gpu}")
+    print(f"  Pass:   >{args.pass_threshold} | Reject: <{args.reject_threshold}")
+    print("=" * 60)
+
+    # ── Step 0.5: Check authentication ──────────────────────────────────
+    print("\n[1/7] Checking Colab authentication...")
+    existing_session = ensure_auth()
+
+    if existing_session:
+        # Reuse existing session
+        session_name = existing_session
+        print(f"  ✅ Reusing existing session: {session_name}")
+    else:
+        # Create new session
+        print("\n[2/7] Provisioning GPU VM...")
+        session_name = f"clip-audit-{int(time.time())}"
+        output = run_colab("new", "-s", session_name, "--gpu", args.gpu, timeout=600, interactive=True)
+        print(f"  ✅ VM ready: {session_name}")
+
+    try:
+        step = 3 if existing_session else 3
+        total_steps = 7 if existing_session else 7
+
+        # ── Mount Google Drive ──────────────────────────────────────────
+        print(f"\n[{step}/{total_steps}] Mounting Google Drive...")
+        run_colab("drivemount", "-s", session_name, timeout=120)
+        print("  ✅ Drive mounted at /content/drive")
+        step += 1
+
+        # ── Install dependencies ────────────────────────────────────────
+        print(f"\n[{step}/{total_steps}] Installing CLIP + dependencies...")
+        run_colab(
+            "install", "-s", session_name,
+            "git+https://github.com/openai/CLIP.git", "pandas",
+            timeout=300,
+        )
+        print("  ✅ Dependencies installed")
+        step += 1
+
+        # ── Upload audit script ─────────────────────────────────────────
+        print(f"\n[{step}/{total_steps}] Uploading audit script...")
+        script_path = os.path.join(os.path.dirname(__file__), "colab_audit.py")
+        if not os.path.isfile(script_path):
+            print(f"ERROR: Script not found: {script_path}")
+            sys.exit(1)
+        run_colab("upload", "-s", session_name, script_path, "/content/colab_audit.py", timeout=60)
+        print("  ✅ Script uploaded")
+        step += 1
+
+        # ── Run classification ──────────────────────────────────────────
+        print(f"\n[{step}/{total_steps}] Running CLIP classification on GPU...")
+        print(f"       Input:  {input_colab}")
+        print(f"       Output: {output_colab}")
+        print()
+
+        run_colab(
+            "exec", "-s", session_name, "-f", "/content/colab_audit.py",
+            "--",
+            "--input", input_colab,
+            "--output", output_colab,
+            "--pass-threshold", str(args.pass_threshold),
+            "--reject-threshold", str(args.reject_threshold),
+            "--batch-size", str(args.batch_size),
+            timeout=3600,  # 1 hour max
+        )
+        step += 1
+
+        # ── Download results summary ────────────────────────────────────
+        print(f"\n[{step}/{total_steps}] Downloading results...")
+        summary_local = os.path.join(tempfile.gettempdir(), "audit_summary.json")
+        run_colab(
+            "download", "-s", session_name,
+            f"{output_colab}/audit_summary.json",
+            summary_local,
+            timeout=60,
+        )
+
+        # ── Show results ────────────────────────────────────────────────
+        print("\n" + "=" * 60)
+        print("  AUDIT COMPLETE")
+        print("=" * 60)
+
+        if os.path.isfile(summary_local):
+            with open(summary_local) as f:
+                summary = json.load(f)
+            print(f"  Total:      {summary['total']}")
+            print(f"  PASS:       {summary['pass']} ({summary['pass_pct']}%)")
+            print(f"  BORDERLINE: {summary['borderline']} ({summary['borderline_pct']}%)")
+            print(f"  REJECT:     {summary['reject']} ({summary['reject_pct']}%)")
+        else:
+            print("  (Summary not available — check output folder on Drive)")
+
+        print(f"\n  📁 Output: {output_path}/")
+        print(f"     PASS/         — graphics-heavy images + audit_log.csv")
+        print(f"     REJECT/       — non-qualifying images + audit_log.csv")
+        print(f"     BORDERLINE/   — uncertain images + audit_log.csv")
+        print(f"     audit_summary.csv")
+        print(f"     audit_summary.json")
+        print("=" * 60)
+
+    finally:
+        # ── Cleanup ─────────────────────────────────────────────────────
+        if not args.keep_vm:
+            print("\nStopping Colab VM...")
+            run_colab("stop", "-s", session_name, timeout=30)
+            print("  ✅ VM stopped")
+        else:
+            print(f"\n  ℹ️  VM kept running: {session_name}")
+            print(f"     Stop with: colab stop -s {session_name}")
+
+
+if __name__ == "__main__":
+    main()

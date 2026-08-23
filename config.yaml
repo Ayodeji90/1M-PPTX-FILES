@@ -274,7 +274,7 @@ delivery:
   # true = deliver extracted page PNGs (image mode); false = deliver
   # whole decks (the legacy contract). Flip per VM as the client's
   # requirements land.
-  image: false
+  image: true
   # Cap per stream-upload cycle. Without a cap, a backlog of hundreds of
   # pages all get hardlinked into the batch dir and pushed in ONE rclone
   # copy; Google Drive's free-tier API quota throttles that copy so hard
