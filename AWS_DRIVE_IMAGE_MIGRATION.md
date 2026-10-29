@@ -5,9 +5,11 @@ This moves already-rendered image batches. It does not run PPTX conversion, so n
 ## Provisioned AWS resources (2026-10-29)
 
 - Region: `us-east-1`
-- CloudFormation stack: `pptx-image-migration-20261029`
+- Original all-in-one stack `pptx-image-migration-20261029` was deleted; its bucket was retained.
+- Current host-only stack: `pptx-image-migration-host-20261029` (reuses the retained bucket)
 - S3 bucket: `pptx-img-archive-448049817364-20261029` (private, encrypted, retained if the stack is deleted)
-- EC2 host: `i-0361b09086e4da0a8` (`t3.small`, Amazon Linux 2023, encrypted 20 GiB gp3 root disk)
+- Current EC2 host: `i-0def77fb09d1d9ef6` (`t3.small`, Amazon Linux 2023, encrypted 20 GiB gp3 root disk)
+- Previous EC2 host `i-0361b09086e4da0a8` was terminated when the original stack was deleted.
 - The host is online in Systems Manager, has no inbound security-group rules, and has an instance role limited to this bucket plus Session Manager.
 - `rclone` and Python 3 are installed. The migration program is at `/opt/pptx-migration/migrate_drive_images_to_s3.py`.
 - The root rclone config already has an `aws` remote using the EC2 instance role; no AWS access keys are stored on the VM.
@@ -15,7 +17,7 @@ This moves already-rendered image batches. It does not run PPTX conversion, so n
 The instance is currently running and incurs hourly compute and public IPv4 charges. To connect from a terminal with the authenticated AWS CLI:
 
 ```bash
-aws ssm start-session --target i-0361b09086e4da0a8 --region us-east-1
+aws ssm start-session --target i-0def77fb09d1d9ef6 --region us-east-1
 ```
 
 The local environment currently lacks `session-manager-plugin`, which the AWS CLI requires for terminal sessions. You can either install it using [AWS's Ubuntu instructions](https://docs.aws.amazon.com/systems-manager/latest/userguide/install-plugin-debian-ubuntu.html), or start a browser-based session from the AWS Console under **Systems Manager → Session Manager → Start session**. The instance is already online there.
@@ -36,7 +38,7 @@ The S3 prefix can be `images/<source-folder>/`; no bucket naming or further AWS 
 After the transfer is verified, remove the temporary EC2 host, role, and security group while retaining the S3 bucket with:
 
 ```bash
-aws cloudformation delete-stack --stack-name pptx-image-migration-20261029 --region us-east-1
+aws cloudformation delete-stack --stack-name pptx-image-migration-host-20261029 --region us-east-1
 ```
 
 ## Proposed setup
@@ -65,7 +67,7 @@ This is read-only. Repeat `--source` for each root/folder you intend to move by 
 
 ## Configure the VM
 
-Install `rclone` and AWS CLI on the Ubuntu instance. Authenticate its AWS CLI through the attached instance role. Check role access with:
+The host is Amazon Linux 2023, with rclone, Python 3, and AWS CLI already installed. Its `aws` rclone remote uses the attached instance role. Check role access with:
 
 ```bash
 aws sts get-caller-identity
