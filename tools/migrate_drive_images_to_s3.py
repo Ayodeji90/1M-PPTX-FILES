@@ -69,6 +69,7 @@ def main() -> int:
     ap.add_argument("--rclone", default="rclone")
     ap.add_argument("--copy", action="store_true", help="perform the copy (default is inventory only)")
     ap.add_argument("--delete-source", action="store_true", help="delete Drive files only after copy+verify")
+    ap.add_argument("--confirm-source", help="exact source path confirmation for scripted deletion")
     ap.add_argument("--verify-download", action="store_true",
                     help="verify by reading object contents after transfer (extra transfer time/cost)")
     ap.add_argument("--storage-rate", default="0.023", type=Decimal,
@@ -123,7 +124,9 @@ def main() -> int:
     print(f"Verified {len(files):,} files / {total:,} bytes at {args.dest}.")
 
     if args.delete_source:
-        confirm = input(f"Type DELETE {args.source} to remove source files: ")
+        confirm = args.confirm_source
+        if confirm is None:
+            confirm = input(f"Type DELETE {args.source} to remove source files: ")
         if confirm != f"DELETE {args.source}":
             print("Source deletion cancelled; verified S3 copy retained.")
             return 4
