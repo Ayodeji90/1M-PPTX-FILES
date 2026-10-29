@@ -105,7 +105,7 @@ def main() -> int:
         return 0
 
     copy = run([args.rclone, "copy", args.source, args.dest,
-                "--transfers", "4", "--checkers", "8", "--retries", "8",
+                "--transfers", "16", "--checkers", "16", "--retries", "8",
                 "--low-level-retries", "20", "--progress"])
     if copy.returncode:
         print(f"COPY FAILED; source retained. {copy.stderr[-1500:]}", file=sys.stderr)
