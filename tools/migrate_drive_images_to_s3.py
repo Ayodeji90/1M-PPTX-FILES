@@ -25,11 +25,41 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def listing(rclone: str, path: str) -> list[dict]:
-    p = run([rclone, "lsjson", "-R", path])
+    p = run([rclone, "lsjson", "-R", "--hash", path])
     if p.returncode:
         raise RuntimeError(f"Cannot list {path}: {p.stderr[-1200:]}")
     data = json.loads(p.stdout or "[]")
     return [e for e in data if not e.get("IsDir")]
+
+
+def unique_files(files: list[dict], path: str) -> list[dict]:
+    """Collapse only byte-identical Drive duplicate-name entries.
+
+    Google Drive can contain multiple files with the same name in a folder.
+    rclone's check compares the unique path set, so only collapse duplicates
+    when size and at least one matching content hash prove they are identical.
+    """
+    grouped: dict[str, list[dict]] = {}
+    for entry in files:
+        grouped.setdefault(entry["Path"], []).append(entry)
+    result = []
+    for name, entries in grouped.items():
+        if len(entries) == 1:
+            result.append(entries[0])
+            continue
+        first = entries[0]
+        first_hashes = first.get("Hashes") or {}
+        if not first_hashes or any(
+            int(entry.get("Size", 0)) != int(first.get("Size", 0))
+            or not (set(first_hashes) & set(entry.get("Hashes") or {}))
+            or any(first_hashes[k] != entry["Hashes"][k]
+                   for k in set(first_hashes) & set(entry.get("Hashes") or {}))
+            for entry in entries[1:]
+        ):
+            raise RuntimeError(f"Ambiguous duplicate filename in {path}: {name}")
+        print(f"Identical duplicate entries: {len(entries)} copies of {name}")
+        result.append(first)
+    return result
 
 
 def main() -> int:
@@ -56,6 +86,12 @@ def main() -> int:
     except (RuntimeError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+
+    try:
+        files = unique_files(files, args.source)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}; source retained.", file=sys.stderr)
+        return 3
 
     total = sum(int(f.get("Size", 0)) for f in files)
     gb = Decimal(total) / Decimal(1_000_000_000)
@@ -91,7 +127,9 @@ def main() -> int:
         if confirm != f"DELETE {args.source}":
             print("Source deletion cancelled; verified S3 copy retained.")
             return 4
-        deleted = run([args.rclone, "delete", args.source])
+        # Drive trash still consumes Google storage quota, so permanently
+        # delete only after the verified copy and exact-path confirmation.
+        deleted = run([args.rclone, "delete", "--drive-use-trash=false", args.source])
         if deleted.returncode:
             print(f"Source deletion failed; S3 copy remains. {deleted.stderr[-1200:]}", file=sys.stderr)
             return deleted.returncode

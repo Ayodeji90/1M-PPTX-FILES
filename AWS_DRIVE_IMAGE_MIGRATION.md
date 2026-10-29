@@ -95,7 +95,7 @@ python tools/migrate_drive_images_to_s3.py \
 
 The copy resumes safely when rerun. After copying, it checks source/destination contents and then checks object counts and byte totals. By default verification compares file sizes; use `--verify-download` for content verification by reading both sides, which costs more time and data transfer. Source files remain in Drive on any copy or verification error.
 
-Only when the S3 copy has been verified and you are ready to free Drive quota, add `--delete-source`. The script asks you to type the exact source path before it deletes anything:
+Only when the S3 copy has been verified and you are ready to free Drive quota, add `--delete-source`. The script asks you to type the exact source path before it deletes anything. It permanently deletes the confirmed source files because Drive Trash still uses storage quota. Duplicate names are collapsed only when file size and a matching content hash prove the entries are identical; ambiguous duplicates stop the run and leave Drive intact:
 
 ```bash
 python tools/migrate_drive_images_to_s3.py \
