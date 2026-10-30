@@ -105,13 +105,14 @@ def main() -> int:
         return 0
 
     copy = run([args.rclone, "copy", args.source, args.dest,
-                "--transfers", "16", "--checkers", "16", "--retries", "8",
+                "--transfers", "4", "--checkers", "4", "--retries", "10",
                 "--low-level-retries", "20", "--progress"])
     if copy.returncode:
         print(f"COPY FAILED; source retained. {copy.stderr[-1500:]}", file=sys.stderr)
         return copy.returncode
 
-    verify_flags = ["--download"] if args.verify_download else ["--size-only"]
+    verify_flags = (["--download"] if args.verify_download else ["--size-only"])
+    verify_flags += ["--checkers", "4"]
     verify = run([args.rclone, "check", args.source, args.dest, *verify_flags])
     if verify.returncode:
         print(f"VERIFY FAILED; source retained. {verify.stderr[-1500:]}", file=sys.stderr)
